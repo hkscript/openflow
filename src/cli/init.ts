@@ -76,7 +76,7 @@ export const initCommand = new Command('init')
           logger.success('OpenSpec project initialized');
         }
       } else {
-        logger.info('OpenSpec not initialized — directories will be auto-created on first /openflow proposal');
+        logger.info('OpenSpec not initialized — directories will be auto-created on first /openflow:proposal');
       }
     } else {
       logger.success('OpenSpec project initialized');

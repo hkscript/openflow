@@ -1,0 +1,130 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1778752090659,
+  "projectRoot": "/private/tmp/openflow",
+  "techStack": {
+    "languages": [
+      {
+        "name": "JavaScript/TypeScript",
+        "version": ">=18.0.0",
+        "confidence": "high",
+        "markers": [
+          "package.json"
+        ]
+      },
+      {
+        "name": "TypeScript",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "tsconfig.json"
+        ]
+      }
+    ],
+    "frameworks": [],
+    "packageManager": "npm",
+    "runtime": "Node.js 18.0.0"
+  },
+  "build": {
+    "buildCommand": "npm run build",
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": "npm run dev",
+    "scripts": {
+      "build": "tsc",
+      "dev": "tsc --watch",
+      "prepublishOnly": "npm run build",
+      "postinstall": "node ./scripts/postinstall.js"
+    }
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "bin",
+      "scripts",
+      "src"
+    ],
+    "gitBranches": {
+      "defaultBranch": "main",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "bin": {
+      "path": "bin",
+      "purpose": "Executable scripts",
+      "fileCount": 1,
+      "lastAccessed": 1778752090621,
+      "keyFiles": [
+        "openflow.js"
+      ]
+    },
+    "dist": {
+      "path": "dist",
+      "purpose": "Distribution/build output",
+      "fileCount": 0,
+      "lastAccessed": 1778752090621,
+      "keyFiles": []
+    },
+    "scripts": {
+      "path": "scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 1,
+      "lastAccessed": 1778752090635,
+      "keyFiles": [
+        "postinstall.js"
+      ]
+    },
+    "src": {
+      "path": "src",
+      "purpose": "Source code",
+      "fileCount": 0,
+      "lastAccessed": 1778752090636,
+      "keyFiles": []
+    },
+    "templates": {
+      "path": "templates",
+      "purpose": null,
+      "fileCount": 6,
+      "lastAccessed": 1778752090637,
+      "keyFiles": [
+        "SKILL.md",
+        "brainstorming.md",
+        "build.md",
+        "close.md",
+        "proposal.md"
+      ]
+    },
+    "dist/utils": {
+      "path": "dist/utils",
+      "purpose": "Utility functions",
+      "fileCount": 4,
+      "lastAccessed": 1778752090638,
+      "keyFiles": [
+        "logger.d.ts",
+        "logger.js",
+        "shell.d.ts"
+      ]
+    },
+    "src/utils": {
+      "path": "src/utils",
+      "purpose": "Utility functions",
+      "fileCount": 2,
+      "lastAccessed": 1778752090638,
+      "keyFiles": [
+        "logger.ts",
+        "shell.ts"
+      ]
+    }
+  },
+  "hotPaths": [],
+  "userDirectives": []
+}
