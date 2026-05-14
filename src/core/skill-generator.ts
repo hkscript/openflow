@@ -124,7 +124,7 @@ name: openflow
 description: "OpenSpec + Superpowers 工作流协调器。使用 /openflow proposal 轻量提问、/openflow brainstorming 深度设计、/openflow spec 生成规格、/openflow build 执行实现、/openflow close 验证归档。串联需求规格与工程执行，消除格式鸿沟。"
 ---
 
-# openflow: 工作流协调器
+# openflow - 工作流协调器
 
 根据用户调用的子命令和项目当前状态，路由到对应阶段。
 

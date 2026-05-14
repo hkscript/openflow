@@ -3,7 +3,7 @@ name: openflow
 description: "OpenSpec + Superpowers workflow orchestrator. Use /openflow proposal for quick capture, /openflow brainstorming for deep design, /openflow spec to generate specs + translate, /openflow build to execute, /openflow close to verify and archive. Bridges requirements specs and engineering execution."
 ---
 
-# openflow: 工作流协调器
+# openflow - 工作流协调器
 
 根据用户调用的子命令和项目当前状态，路由到对应阶段。
 
