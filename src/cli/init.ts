@@ -76,7 +76,7 @@ export const initCommand = new Command('init')
           logger.success('OpenSpec project initialized');
         }
       } else {
-        logger.info('OpenSpec not initialized — directories will be auto-created on first /openflow:proposal');
+        logger.info('OpenSpec not initialized — directories will be auto-created on first /openflow proposal');
       }
     } else {
       logger.success('OpenSpec project initialized');
@@ -100,16 +100,16 @@ export const initCommand = new Command('init')
     logger.blank();
 
     if (!depStatus.superpowers.installed) {
-      logger.warn('Note: Superpowers not installed — /openflow:build will use manual execution mode');
+      logger.warn('Note: Superpowers not installed — /openflow build will use manual execution mode');
       logger.info(`  Install with: ${DEPS.superpowers.installHint}`);
       logger.blank();
     }
 
     logger.info('Available commands:');
-    logger.info('  /openflow:proposal      Quick requirement capture');
+    logger.info('  /openflow proposal      Quick requirement capture');
     logger.info('  /openflow:brainstorming  Deep design exploration');
     logger.info('  /openflow:spec           Generate specs + translate');
-    logger.info('  /openflow:build          Execute implementation');
+    logger.info('  /openflow build          Execute implementation');
     logger.info('  /openflow:close          Verify + archive');
     logger.blank();
   });

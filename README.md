@@ -47,7 +47,7 @@ Re-generates project skills after upgrading the npm package.
 
 | Command | Phase | Description |
 |---------|-------|-------------|
-| `/openflow:proposal` | proposal | Lightweight capture — 3-5 questions to converge on requirements |
+| `/openflow proposal` | proposal | Lightweight capture — 3-5 questions to converge on requirements |
 | `/openflow:brainstorming` | brainstorming | Deep design — multi-round tradeoff exploration |
 | `/openflow:spec` | spec | Call OpenSpec to generate specs + auto-translate to plan-ready.md |
 | `/openflow:build` | build | Call Superpowers to execute implementation |
@@ -77,7 +77,7 @@ Works without them: yes, with manual-file fallback
 ```
 User Requirements
    │
-   ├── Quick ──→ /openflow:proposal ──┐
+   ├── Quick ──→ /openflow proposal ──┐
    │           3-5 questions          │
    │                                  ├─→ proposal.md
    └── Deep ───→ /openflow:brainstorming ─┘ (openspec/changes/<name>/)
