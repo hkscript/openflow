@@ -8,11 +8,18 @@ import fs from 'fs';
 
 export interface DepStatus {
   openspec: { installed: boolean; version?: string; autoInstalled?: boolean };
-  superpowers: { installed: boolean; hint?: string };
+  superpowers: { installed: boolean; hint?: string; path?: string; checkedPaths: string[] };
 }
 
-export function checkDependencies(): DepStatus {
+export interface CheckDependencyOptions {
+  cwd?: string;
+  tools?: string[];
+}
+
+export function checkDependencies(options: CheckDependencyOptions = {}): DepStatus {
   const home = os.homedir();
+  const cwd = options.cwd ?? process.cwd();
+  const tools = options.tools?.length ? options.tools : Object.keys(TOOL_PATHS);
 
   // Check OpenSpec
   const openspecInstalled = cmdExists(DEPS.openspec.cliCmd);
@@ -21,9 +28,10 @@ export function checkDependencies(): DepStatus {
     openspecVersion = exec('openspec --version') || undefined;
   }
 
-  // Check Superpowers
-  const superpowersSkillPath = path.join(home, '.claude', 'skills', DEPS.superpowers.checkPath);
-  const superpowersInstalled = fileExists(superpowersSkillPath);
+  // Check Superpowers in the selected tools' local and global skill dirs.
+  const superpowersSkillPaths = getSuperpowersSkillPaths(cwd, home, tools);
+  const superpowersSkillPath = superpowersSkillPaths.find((candidate) => fs.existsSync(candidate));
+  const superpowersInstalled = Boolean(superpowersSkillPath);
 
   return {
     openspec: {
@@ -33,8 +41,24 @@ export function checkDependencies(): DepStatus {
     superpowers: {
       installed: superpowersInstalled,
       hint: superpowersInstalled ? undefined : DEPS.superpowers.installHint,
+      path: superpowersSkillPath,
+      checkedPaths: superpowersSkillPaths,
     },
   };
+}
+
+function getSuperpowersSkillPaths(cwd: string, home: string, tools: string[]): string[] {
+  const candidates = new Set<string>();
+
+  for (const tool of tools) {
+    const toolPaths = TOOL_PATHS[tool];
+    if (!toolPaths) continue;
+
+    candidates.add(path.join(cwd, toolPaths.skillsDir, DEPS.superpowers.checkPath));
+    candidates.add(path.join(home, toolPaths.skillsDir, DEPS.superpowers.checkPath));
+  }
+
+  return [...candidates];
 }
 
 export function tryAutoInstall(pkg: string): boolean {
@@ -62,20 +86,30 @@ export interface InitState {
 }
 
 export function readState(cwd: string): InitState | null {
-  const stateFile = path.join(cwd, '.claude', 'openflow-state.json');
-  if (!fileExists(stateFile)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
-  } catch {
-    return null;
+  for (const stateFile of getStateFileCandidates(cwd)) {
+    if (!fileExists(stateFile)) continue;
+    try {
+      return JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
+    } catch {
+      return null;
+    }
   }
+
+  return null;
 }
 
 export function writeState(cwd: string, state: InitState): void {
-  const stateDir = path.join(cwd, '.claude');
+  const stateDir = path.join(cwd, '.openflow');
   if (!dirExists(stateDir)) {
     fs.mkdirSync(stateDir, { recursive: true });
   }
-  const stateFile = path.join(stateDir, 'openflow-state.json');
+  const stateFile = path.join(stateDir, 'state.json');
   fs.writeFileSync(stateFile, JSON.stringify(state, null, 2) + '\n');
+}
+
+function getStateFileCandidates(cwd: string): string[] {
+  return [
+    path.join(cwd, '.openflow', 'state.json'),
+    path.join(cwd, '.claude', 'openflow-state.json'),
+  ];
 }

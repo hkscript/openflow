@@ -52,10 +52,16 @@ description: Verify implementation consistency and archive
 
 ### 5. 归档
 
-全部一致（或用户接受不一致项）后，执行归档：
+全部一致（或用户接受不一致项）后，先校验变更：
 
 ```bash
-openspec archive <变更名>
+openspec validate <变更名> --strict
+```
+
+校验通过后执行归档：
+
+```bash
+openspec archive <变更名> --yes
 ```
 
 如果 OpenSpec CLI 不可用，手动归档：

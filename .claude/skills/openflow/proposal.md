@@ -27,21 +27,21 @@ description: Lightweight requirement capture — 3-5 questions to quickly conver
 
 > "我理解的需求是：[一句话概括]。具体来说：[2-3 条要点]。这样理解对吗？"
 
-### 3. 创建 OpenSpec 变更
+### 3. 创建 OpenSpec 变更目录
 
-用户确认后，调用 OpenSpec 创建变更：
-
-```bash
-openspec new <变更名>
-```
-
-如果 OpenSpec CLI 不可用，手动创建目录结构：
+用户确认后，按 OpenSpec 目录约定创建变更。`<变更名>` 使用 kebab-case、动词开头（如 `add-user-login`）：
 
 ```bash
 mkdir -p openspec/changes/<变更名>/specs
 ```
 
 将确认的需求描述写入 `openspec/changes/<变更名>/proposal.md`。
+
+如果 OpenSpec CLI 可用，可用以下命令检查当前变更列表：
+
+```bash
+openspec list
+```
 
 ### 4. 提示下一步
 

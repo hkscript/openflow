@@ -1,7 +1,8 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { fileExists, dirExists } from '../utils/shell.js';
+import { fileExists } from '../utils/shell.js';
 import { logger } from '../utils/logger.js';
 import { SKILL_NAME, TOOL_PATHS, DEPS } from './constants.js';
 import type { DepStatus } from './dependency-check.js';
@@ -16,10 +17,12 @@ export interface GenerateOptions {
   cwd: string;
   tools: string[];
   depStatus: DepStatus;
+  global?: boolean;
 }
 
 export function generateSkills(options: GenerateOptions): void {
-  const { cwd, tools, depStatus } = options;
+  const { cwd, tools, depStatus, global = false } = options;
+  const baseDir = global ? os.homedir() : cwd;
 
   for (const tool of tools) {
     const toolPaths = TOOL_PATHS[tool];
@@ -28,11 +31,14 @@ export function generateSkills(options: GenerateOptions): void {
       continue;
     }
 
-    const skillsDir = path.join(cwd, toolPaths.skillsDir, SKILL_NAME);
+    const skillsDir = path.join(baseDir, toolPaths.skillsDir, SKILL_NAME);
+    const displayPath = global
+      ? path.join('~', toolPaths.skillsDir, SKILL_NAME)
+      : path.relative(cwd, skillsDir);
 
-    logger.step(`Generating ${tool} skills to ${path.relative(cwd, skillsDir)}/`);
+    logger.step(`Generating ${tool} skills to ${displayPath}/`);
 
-    if (!dirExists(skillsDir)) {
+    if (!fs.existsSync(skillsDir)) {
       fs.mkdirSync(skillsDir, { recursive: true });
     }
 
@@ -84,7 +90,7 @@ function injectRuntimeDepCheck(content: string, depStatus: DepStatus): string {
 
 | 依赖 | 检测方式 | 不可用时 |
 |------|----------|----------|
-| Superpowers writing-plans | \`~/.claude/skills/writing-plans/SKILL.md\` 是否存在 | 降级为手动拆解 plan-ready.md 中的步骤，逐条执行 |
+| Superpowers writing-plans | 当前工具的本地或全局 skills 目录下是否存在 \`writing-plans/SKILL.md\` | 降级为手动拆解 plan-ready.md 中的步骤，逐条执行 |
 | OpenSpec CLI | \`openspec\` 命令是否可执行 | 不影响 build 阶段，但 close 阶段归档需手动 mv |
 
 如果 Superpowers 不可用，提示用户：
@@ -106,13 +112,13 @@ function injectRuntimeDepCheck(content: string, depStatus: DepStatus): string {
 
 function injectSpecRuntimeCheck(content: string, depStatus: DepStatus): string {
   const checkNote = `
-> **OpenSpec 检测**：如果 \`openspec\` CLI 可用，调用 \`openspec propose\` 生成完整规格；否则手动根据 proposal.md 生成 design.md + specs/ + tasks.md。
+> **OpenSpec 检测**：根据 proposal.md 生成 design.md + specs/ + tasks.md；如果 \`openspec\` CLI 可用，生成后运行 \`openspec validate <变更名> --strict\` 校验。
 `;
 
   const lines = content.split('\n');
-  const proposeIdx = lines.findIndex((l) => l.includes('openspec propose'));
-  if (proposeIdx >= 0) {
-    lines.splice(proposeIdx + 1, 0, checkNote);
+  const validateIdx = lines.findIndex((l) => l.includes('openspec validate'));
+  if (validateIdx >= 0) {
+    lines.splice(validateIdx, 0, checkNote);
   }
   return lines.join('\n');
 }
@@ -162,7 +168,7 @@ description: "OpenSpec + Superpowers 工作流协调器。使用 /openflow propo
 
 1. 如果用户指定了子命令（如 \`/openflow build\`），优先按指定阶段执行，但检查前置条件
 2. 如果用户只输入 \`/openflow\`，执行状态检测，自动路由到对应阶段
-3. 读取阶段文件：\`\${CLAUDE_SKILL_DIR}/<阶段>.md\`
+3. 读取当前 openflow skill 目录下的阶段文件：\`<阶段>.md\`（与本 \`SKILL.md\` 同目录；不要依赖 Claude 专属环境变量）
 4. 按阶段文件中的流程执行
 
 ### 前置条件检查

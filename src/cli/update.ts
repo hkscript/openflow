@@ -18,7 +18,7 @@ export const updateCommand = new Command('update')
     logger.info('openflow update — regenerating skills');
     logger.blank();
 
-    const depStatus = checkDependencies();
+    const depStatus = checkDependencies({ cwd, tools: state.tools });
     generateSkills({
       cwd,
       tools: state.tools,

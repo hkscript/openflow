@@ -26,23 +26,25 @@ description: Call OpenSpec to generate specs, auto-translate to plan-ready.md af
 如果有多个，列出并让用户选择：
 > "检测到多个活跃变更：[列表]。要对哪个生成规格？"
 
-### 2. 调用 OpenSpec 生成规格
+### 2. 生成 OpenSpec 规格文件
 
-调用 OpenSpec 的 propose 命令（或 OPSX 工作流）生成完整规格：
-
-```bash
-openspec propose <变更名>
-
-> **OpenSpec 检测**：如果 `openspec` CLI 可用，调用 `openspec propose` 生成完整规格；否则手动根据 proposal.md 生成 design.md + specs/ + tasks.md。
-
-```
-
-如果 OpenSpec CLI 不可用，手动根据 proposal.md 的内容生成以下文件：
+根据 proposal.md 的内容生成或补齐以下文件：
 
 - `openspec/changes/<变更名>/proposal.md` — 已存在，可补充
 - `openspec/changes/<变更名>/design.md` — 技术方案
 - `openspec/changes/<变更名>/specs/` — 具体规格变更（标记新增/修改/删除）
 - `openspec/changes/<变更名>/tasks.md` — 实现任务清单
+
+如果 OpenSpec CLI 可用，生成后运行校验：
+
+```bash
+
+> **OpenSpec 检测**：根据 proposal.md 生成 design.md + specs/ + tasks.md；如果 `openspec` CLI 可用，生成后运行 `openspec validate <变更名> --strict` 校验。
+
+openspec validate <变更名> --strict
+```
+
+如果校验失败，根据错误修正上述文件后重新校验。
 
 ### 3. 与用户确认规格
 

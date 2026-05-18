@@ -13,11 +13,11 @@ description: Call Superpowers to execute implementation, supports checkpoint rec
 
 | 依赖 | 检测方式 | 不可用时 |
 |------|----------|----------|
-| Superpowers writing-plans | `~/.claude/skills/writing-plans/SKILL.md` 是否存在 | 降级为手动拆解 plan-ready.md 中的步骤，逐条执行 |
+| Superpowers writing-plans | 当前工具的本地或全局 skills 目录下是否存在 `writing-plans/SKILL.md` | 降级为手动拆解 plan-ready.md 中的步骤，逐条执行 |
 | OpenSpec CLI | `openspec` 命令是否可执行 | 不影响 build 阶段，但 close 阶段归档需手动 mv |
 
 如果 Superpowers 不可用，提示用户：
-> "Superpowers 未安装，build 将使用手动执行模式。安装后体验更佳：请在 Claude Code 中执行: /plugin install superpowers@claude-plugins-official"
+> "Superpowers 未安装，build 将使用手动执行模式。安装后体验更佳：请在当前工具中安装 Superpowers writing-plans skill（Claude Code: /plugin install superpowers@claude-plugins-official）"
 
 如果 Superpowers 可用，调用其 `writing-plans` skill 生成详细实现计划。
 

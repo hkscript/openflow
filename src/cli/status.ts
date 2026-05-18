@@ -14,9 +14,11 @@ export const statusCommand = new Command('status')
     logger.info('openflow status');
     logger.blank();
 
+    const state = readState(cwd);
+
     // Dependencies
     logger.step('Dependencies:');
-    const depStatus = checkDependencies();
+    const depStatus = checkDependencies({ cwd, tools: state?.tools });
 
     if (depStatus.openspec.installed) {
       logger.success(`OpenSpec CLI${depStatus.openspec.version ? ` v${depStatus.openspec.version}` : ''}`);
@@ -25,7 +27,7 @@ export const statusCommand = new Command('status')
     }
 
     if (depStatus.superpowers.installed) {
-      logger.success('Superpowers');
+      logger.success(`Superpowers${depStatus.superpowers.path ? ` (${depStatus.superpowers.path})` : ''}`);
     } else {
       logger.warn('Superpowers — not installed (build phase will use manual mode)');
     }
@@ -34,7 +36,6 @@ export const statusCommand = new Command('status')
 
     // Project state
     logger.step('Project:');
-    const state = readState(cwd);
 
     if (state) {
       logger.success(`Initialized (${state.tools.join(', ')})`);

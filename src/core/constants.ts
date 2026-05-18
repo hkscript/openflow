@@ -14,7 +14,7 @@ export const DEPS = {
   superpowers: {
     name: 'Superpowers',
     checkPath: 'writing-plans/SKILL.md',
-    installHint: '请在 Claude Code 中执行: /plugin install superpowers@claude-plugins-official',
+    installHint: '请在当前工具中安装 Superpowers writing-plans skill（Claude Code: /plugin install superpowers@claude-plugins-official）',
     autoInstallable: false,
   },
 } as const;

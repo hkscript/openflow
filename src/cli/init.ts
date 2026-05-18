@@ -12,17 +12,19 @@ const SUPPORTED_TOOLS = Object.keys(TOOL_PATHS);
 export const initCommand = new Command('init')
   .description('Initialize openflow skills in the current project')
   .option('-t, --tools <tools>', 'Target tools, comma-separated', 'claude')
+  .option('-g, --global', 'Install skills globally under home tool directories')
   .action(async (options) => {
     const cwd = process.cwd();
     const tools = options.tools.split(',').map((t: string) => t.trim());
+    const installGlobally = Boolean(options.global);
 
     logger.blank();
-    logger.info('openflow init — workflow orchestrator setup');
+    logger.info(`openflow init — ${installGlobally ? 'global skill setup' : 'workflow orchestrator setup'}`);
     logger.blank();
 
     // Step 1: Check OpenSpec
     logger.step('Checking OpenSpec ...');
-    let depStatus = checkDependencies();
+    let depStatus = checkDependencies({ cwd, tools });
 
     if (!depStatus.openspec.installed) {
       logger.warn('OpenSpec CLI not installed');
@@ -37,7 +39,7 @@ export const initCommand = new Command('init')
 
       if (installOpenSpec) {
         const ok = tryAutoInstall(DEPS.openspec.npmPkg);
-        depStatus = checkDependencies(); // recheck
+        depStatus = checkDependencies({ cwd, tools }); // recheck
         if (ok) depStatus.openspec.autoInstalled = true;
       } else {
         logger.warn('Skipped OpenSpec install — spec phase will use manual fallback');
@@ -54,46 +56,52 @@ export const initCommand = new Command('init')
       logger.info(DEPS.superpowers.installHint);
       logger.info('Re-run openflow init after installing, or build phase will use manual fallback');
     } else {
-      logger.success('Superpowers installed');
+      logger.success(`Superpowers installed${depStatus.superpowers.path ? ` (${depStatus.superpowers.path})` : ''}`);
     }
 
-    // Step 3: Check if OpenSpec is initialized in project
-    logger.step('Checking project OpenSpec initialization ...');
-    if (!checkOpenSpecInitialized(cwd)) {
-      if (depStatus.openspec.installed) {
-        const { initOpenSpec } = await inquirer.prompt([
-          {
-            type: 'confirm',
-            name: 'initOpenSpec',
-            message: 'OpenSpec not initialized in this project. Run openspec init?',
-            default: true,
-          },
-        ]);
+    if (installGlobally) {
+      logger.step('Skipping project OpenSpec initialization for global install');
+    } else {
+      // Step 3: Check if OpenSpec is initialized in project
+      logger.step('Checking project OpenSpec initialization ...');
+      if (!checkOpenSpecInitialized(cwd)) {
+        if (depStatus.openspec.installed) {
+          const { initOpenSpec } = await inquirer.prompt([
+            {
+              type: 'confirm',
+              name: 'initOpenSpec',
+              message: 'OpenSpec not initialized in this project. Run openspec init?',
+              default: true,
+            },
+          ]);
 
-        if (initOpenSpec) {
-          const toolsFlag = tools.map((t: string) => t).join(',');
-          exec(`openspec init --tools ${toolsFlag}`, { stdio: 'inherit' });
-          logger.success('OpenSpec project initialized');
+          if (initOpenSpec) {
+            const toolsFlag = tools.map((t: string) => t).join(',');
+            exec(`openspec init --tools ${toolsFlag}`, { stdio: 'inherit' });
+            logger.success('OpenSpec project initialized');
+          }
+        } else {
+          logger.info('OpenSpec not initialized — directories will be auto-created on first /openflow proposal');
         }
       } else {
-        logger.info('OpenSpec not initialized — directories will be auto-created on first /openflow proposal');
+        logger.success('OpenSpec project initialized');
       }
-    } else {
-      logger.success('OpenSpec project initialized');
     }
 
     // Step 4: Generate skills
     logger.step('Generating openflow skills ...');
-    generateSkills({ cwd, tools, depStatus });
+    generateSkills({ cwd, tools, depStatus, global: installGlobally });
 
-    // Step 5: Write state
-    writeState(cwd, {
-      openspec: depStatus.openspec.installed,
-      superpowers: depStatus.superpowers.installed,
-      openspecProjectInitialized: checkOpenSpecInitialized(cwd),
-      createdAt: new Date().toISOString(),
-      tools,
-    });
+    if (!installGlobally) {
+      // Step 5: Write state
+      writeState(cwd, {
+        openspec: depStatus.openspec.installed,
+        superpowers: depStatus.superpowers.installed,
+        openspecProjectInitialized: checkOpenSpecInitialized(cwd),
+        createdAt: new Date().toISOString(),
+        tools,
+      });
+    }
 
     logger.blank();
     logger.success('openflow initialized!');

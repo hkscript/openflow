@@ -23,9 +23,24 @@ openflow init --tools claude
 1. Detect and guide OpenSpec CLI installation
 2. Detect Superpowers and show install instructions
 3. Check if OpenSpec is initialized in the project
-4. Generate openflow skills to `.claude/skills/openflow/`
+4. Generate openflow skills to the selected tools' local skill directories, such as `.claude/skills/openflow/`, `.codex/skills/openflow/`, or `.cursor/skills/openflow/`
 
 Supported tools: `claude`, `codex`, `cursor` (comma-separated, e.g. `--tools claude,codex`)
+
+### Install skills globally
+
+```bash
+openflow init --tools claude -g
+openflow init --tools claude,codex,cursor --global
+```
+
+With `-g` / `--global`, `openflow` installs skills under the selected tools' home directories:
+
+| Tool | Global skill path |
+|------|-------------------|
+| `claude` | `~/.claude/skills/openflow/` |
+| `codex` | `~/.codex/skills/openflow/` |
+| `cursor` | `~/.cursor/skills/openflow/` |
 
 ### Check status
 
@@ -69,7 +84,7 @@ Works without them: yes, with manual-file fallback
 
 | Layer | Mechanism | When missing |
 |-------|-----------|-------------|
-| **Init time** | Detect OpenSpec → auto-install; Detect Superpowers → show install hint | Non-blocking, skills still generated |
+| **Init time** | Detect OpenSpec CLI from `PATH`; detect project OpenSpec in `./openspec/`; detect Superpowers in the selected tools' local/global skill dirs | Non-blocking, skills still generated |
 | **Runtime** | Dependency check injected into SKILL.md | Build phase falls back to manual step-by-step execution |
 
 ## Architecture

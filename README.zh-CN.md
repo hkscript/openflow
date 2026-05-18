@@ -23,9 +23,24 @@ openflow init --tools claude
 1. 检测并引导安装 OpenSpec CLI
 2. 检测 Superpowers 并提示安装方式
 3. 检测项目 OpenSpec 初始化状态
-4. 生成 openflow skills 到项目 `.claude/skills/openflow/`
+4. 生成 openflow skills 到所选工具的项目级 skill 目录，如 `.claude/skills/openflow/`、`.codex/skills/openflow/` 或 `.cursor/skills/openflow/`
 
 支持的工具：`claude`、`codex`、`cursor`（逗号分隔，如 `--tools claude,codex`）
+
+### 安装到全局 skills
+
+```bash
+openflow init --tools claude -g
+openflow init --tools claude,codex,cursor --global
+```
+
+加 `-g` / `--global` 后，`openflow` 会把 skills 安装到所选工具的全局目录：
+
+| 工具 | 全局 skill 路径 |
+|------|-----------------|
+| `claude` | `~/.claude/skills/openflow/` |
+| `codex` | `~/.codex/skills/openflow/` |
+| `cursor` | `~/.cursor/skills/openflow/` |
 
 ### 查看状态
 
@@ -69,7 +84,7 @@ Works without them: yes, with manual-file fallback
 
 | 层 | 机制 | 缺失时 |
 |----|------|--------|
-| **init 时** | 检测 OpenSpec → 自动安装；检测 Superpowers → 提示安装命令 | 不阻断，继续生成 skills |
+| **init 时** | 从 `PATH` 检测 OpenSpec CLI；从 `./openspec/` 检测当前项目 OpenSpec；从所选工具的本地/全局 skill 目录检测 Superpowers | 不阻断，继续生成 skills |
 | **运行时** | SKILL.md 注入依赖检测段 | build 阶段降级为手动拆解步骤执行 |
 
 ## 架构

@@ -3,7 +3,7 @@ name: openflow
 description: "OpenSpec + Superpowers workflow orchestrator. Use /openflow proposal for quick capture, /openflow brainstorming for deep design, /openflow spec to generate specs + translate, /openflow build to execute, /openflow close to verify and archive. Bridges requirements specs and engineering execution."
 ---
 
-# openflow: 工作流协调器
+# openflow - 工作流协调器
 
 根据用户调用的子命令和项目当前状态，路由到对应阶段。
 
@@ -41,7 +41,7 @@ description: "OpenSpec + Superpowers workflow orchestrator. Use /openflow propos
 
 1. 如果用户指定了子命令（如 `/openflow build`），优先按指定阶段执行，但检查前置条件
 2. 如果用户只输入 `/openflow`，执行状态检测，自动路由到对应阶段
-3. 读取阶段文件：`${CLAUDE_SKILL_DIR}/<阶段>.md`
+3. 读取当前 openflow skill 目录下的阶段文件：`<阶段>.md`（与本 `SKILL.md` 同目录；不要依赖 Claude 专属环境变量）
 4. 按阶段文件中的流程执行
 
 ### 前置条件检查
