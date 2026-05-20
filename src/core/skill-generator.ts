@@ -134,6 +134,31 @@ description: "OpenSpec + Superpowers 工作流协调器。使用 /openflow propo
 
 根据用户调用的子命令和项目当前状态，路由到对应阶段。
 
+## 续接与中断恢复
+
+如果本轮没有显式 \`/openflow ...\` 子命令，但上一轮已经进入 openflow 任一阶段，并且用户是在补充范围、回答确认问题、说“继续”、修正需求、或说明新增/移除边界：
+
+1. 默认继续上一 openflow 阶段，不把该回复当作普通编码请求
+2. 如果上一阶段是 proposal、brainstorming 或 spec，只能继续产出/更新 OpenSpec 文档，不得修改任何代码或实现文件
+3. 只有用户显式调用 \`/openflow build\`，或状态检测明确进入 build 阶段后，才允许修改代码或实现文件
+4. 中断后恢复时，先重新读取当前阶段文件和 \`openspec/changes/\` 状态，再继续执行
+
+典型场景：
+- proposal 阶段整理需求后，用户补充“运营端也要做回显”。这仍是需求范围修正，必须继续 proposal 文档收敛，不能直接进入代码实现。
+- brainstorming 阶段询问“是否只覆盖企业端？”后，用户回复“运营端也要做回显”。这仍是设计范围修正，必须继续 brainstorming/proposal 文档收敛，不能直接进入代码实现。
+
+## 阶段写入边界
+
+| 阶段 | 允许写入 | 禁止写入 |
+|------|----------|----------|
+| proposal | \`openspec/changes/**/proposal.md\` | 任何代码或实现文件 |
+| brainstorming | \`openspec/changes/**/proposal.md\` | 任何代码或实现文件 |
+| spec | \`openspec/changes/**\`、\`plan-ready.md\` | 任何代码或实现文件 |
+| build | 代码、测试、实现计划状态 | 规格文档（除非另开变更） |
+| close | 归档、验证记录、\`close-issues.md\` | 代码、测试、其他实现文件 |
+
+如果用户在 proposal/brainstorming/spec 阶段提出“就按这个做”“范围改成 X”“继续”等话术，不代表进入 build；必须先完成该阶段文档产物并提示下一步。
+
 ## 子命令
 
 | 命令 | 阶段 | 说明 |
@@ -166,10 +191,11 @@ description: "OpenSpec + Superpowers 工作流协调器。使用 /openflow propo
 
 根据子命令或状态检测结果，读取对应阶段文件并执行：
 
-1. 如果用户指定了子命令（如 \`/openflow build\`），优先按指定阶段执行，但检查前置条件
-2. 如果用户只输入 \`/openflow\`，执行状态检测，自动路由到对应阶段
-3. 读取当前 openflow skill 目录下的阶段文件：\`<阶段>.md\`（与本 \`SKILL.md\` 同目录；不要依赖 Claude 专属环境变量）
-4. 按阶段文件中的流程执行
+1. 如果这是上一 openflow 阶段的续接回复，先按“续接与中断恢复”保持阶段
+2. 如果用户指定了子命令（如 \`/openflow build\`），优先按指定阶段执行，但检查前置条件
+3. 如果用户只输入 \`/openflow\`，执行状态检测，自动路由到对应阶段
+4. 读取当前 openflow skill 目录下的阶段文件：\`<阶段>.md\`（与本 \`SKILL.md\` 同目录；不要依赖 Claude 专属环境变量）
+5. 按阶段文件中的流程执行，并遵守阶段写入边界
 
 ### 前置条件检查
 

@@ -12,8 +12,8 @@ description: "OpenSpec + Superpowers workflow orchestrator. Use /openflow propos
 如果本轮没有显式 `/openflow ...` 子命令，但上一轮已经进入 openflow 任一阶段，并且用户是在补充范围、回答确认问题、说“继续”、修正需求、或说明新增/移除边界：
 
 1. 默认继续上一 openflow 阶段，不把该回复当作普通编码请求
-2. 如果上一阶段是 proposal、brainstorming 或 spec，只能继续产出/更新 OpenSpec 文档，不得修改业务代码
-3. 只有用户显式调用 `/openflow build`，或状态检测明确进入 build 阶段后，才允许修改业务代码
+2. 如果上一阶段是 proposal、brainstorming 或 spec，只能继续产出/更新 OpenSpec 文档，不得修改任何代码或实现文件
+3. 只有用户显式调用 `/openflow build`，或状态检测明确进入 build 阶段后，才允许修改代码或实现文件
 4. 中断后恢复时，先重新读取当前阶段文件和 `openspec/changes/` 状态，再继续执行
 
 典型场景：
@@ -24,11 +24,11 @@ description: "OpenSpec + Superpowers workflow orchestrator. Use /openflow propos
 
 | 阶段 | 允许写入 | 禁止写入 |
 |------|----------|----------|
-| proposal | `openspec/changes/**/proposal.md` | `src/**`、业务代码、测试代码 |
-| brainstorming | `openspec/changes/**/proposal.md` | `src/**`、业务代码、测试代码 |
-| spec | `openspec/changes/**`、`plan-ready.md` | `src/**`、业务代码、测试代码 |
-| build | 业务代码、测试代码、实现计划状态 | 规格文档（除非另开变更） |
-| close | 归档、验证记录、`close-issues.md` | 业务代码、测试代码 |
+| proposal | `openspec/changes/**/proposal.md` | 任何代码或实现文件 |
+| brainstorming | `openspec/changes/**/proposal.md` | 任何代码或实现文件 |
+| spec | `openspec/changes/**`、`plan-ready.md` | 任何代码或实现文件 |
+| build | 代码、测试、实现计划状态 | 规格文档（除非另开变更） |
+| close | 归档、验证记录、`close-issues.md` | 代码、测试、其他实现文件 |
 
 如果用户在 proposal/brainstorming/spec 阶段提出“就按这个做”“范围改成 X”“继续”等话术，不代表进入 build；必须先完成该阶段文档产物并提示下一步。
 
