@@ -9,6 +9,10 @@ description: Call Superpowers to execute implementation, supports checkpoint rec
 
 读取 plan-ready.md，调用 Superpowers 的 writing-plans 生成详细实现计划，然后按 TDD 铁律执行。
 
+## 中断续接规则
+
+如果用户在 build 阶段被打断后继续回复、说“继续”、或补充实现细节，保持 build 阶段并从实现计划/checkbox 状态恢复。不要回到 proposal、brainstorming 或 spec，除非用户明确要求修改需求或重新生成规格。
+
 ## 前置条件
 
 - `openspec/changes/<变更名>/plan-ready.md` 存在
@@ -70,5 +74,6 @@ docs/superpowers/plans/YYYY-MM-DD-<变更名>.md
 ## 关键原则
 
 - **不允许在 build 阶段修改规格文档** — 发现问题先记录，留到 close 阶段处理
+- build 是唯一默认允许修改业务代码的阶段；如果上一阶段不是 build，不要因为用户确认范围而自动写代码
 - plan-ready.md 是锁定的设计决策，Superpowers 按计划展开执行，不重新理解需求
 - 断点恢复依赖文件系统状态，不依赖 AI 的会话记忆
