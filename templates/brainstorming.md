@@ -17,16 +17,14 @@ description: Deep design powered by Superpowers brainstorming — openflow sets 
 
 ## 流程
 
-### 0. 依赖检测
+### 0. 前置检查
 
-| 依赖 | 检测方式 | 不可用时 |
-|------|----------|----------|
-| Superpowers brainstorming | 当前工具的本地或全局 skills 目录下是否存在 `brainstorming/SKILL.md` | 降级为手动多轮提问（见下方"手动降级模式"） |
+Superpowers brainstorming **必须可用**。检查当前工具的本地或全局 skills 目录下是否存在 `brainstorming/SKILL.md`。
 
-Superpowers 不可用时，提示用户：
-> "Superpowers brainstorming 未安装，将使用手动提问模式。安装后体验更佳。"
+如果不存在，报错终止：
+> "❌ Superpowers brainstorming 未安装。openflow brainstorming 依赖 Superpowers 做深度探索。请先安装 Superpowers，然后重试。安装方式：..."
 
-### 1. 读取上下文（openflow 负责，Superpowers 不做的事）
+### 1. 读取上下文（openflow 负责）
 
 **在调用 Superpowers 之前，先帮它准备好战场。**
 
@@ -34,32 +32,15 @@ Superpowers 不可用时，提示用户：
 2. 扫一眼核心文件：快速浏览入口文件和关键函数
 3. 检查现有测试：测试目录结构、测试框架、现有测试覆盖情况
 4. 检查 git 历史：最近的相关提交，了解模块最近的变更
+5. 检索沉淀经验：grep 存档中的 lessons.md 和 design.md
 
 ### 2. 调用 Superpowers brainstorming（核心探索）
 
-如果 Superpowers 可用，调用 `brainstorming` skill，并将步骤 1 收集的上下文传递给它：
+调用 `brainstorming` skill，将步骤 1 收集的上下文传递给它：
 
 > "项目上下文：[步骤 1 的发现]。用户需求：[用户描述]。请进行多轮探索，输出设计方向和方案取舍。"
 
-Superpowers brainstorming 会进行：
-- 逐个深入提问，探索用户意图
-- 多轮方案取舍讨论
-- 收敛到推荐方案
-
 **openflow 在本步骤的职责：确保探索不偏离方向，引导 Superpowers 关注可测试性——每个关键行为是否有可观测的输出或副作用。**
-
-如果 Superpowers 不可用，执行手动降级模式：
-
-#### 手动降级模式
-
-一次只问一个问题，逐步深入。问题类型：
-
-- **目的** — "这个功能的核心用户场景是什么？"
-- **取舍** — "A 方案更简单但扩展性差，B 方案更灵活但复杂。你倾向哪个？"
-- **边界** — "如果 X 情况发生，期望的行为是什么？"（引导用户用"给定-当-那么"格式描述）
-- **可测试性** — "这个行为怎么验证？有什么可观测的输出或副作用？"
-
-基于讨论提出 2-3 种方案，附上取舍分析。推荐一种并说明理由和测试策略。
 
 **反幻觉检查（必做）：在推荐方案前，先提出反方论点：**
 
@@ -68,7 +49,7 @@ Superpowers brainstorming 会进行：
 
 ### 3. 确认设计方向
 
-无论是 Superpowers 输出还是手动模式输出，与用户确认：
+与用户确认 Superpowers 的探索结果：
 
 > "确认的设计方向：[方案名]。核心决策：[2-3 条]。测试策略：[如何验证] 主要风险：[1 条]。这样对吗？"
 

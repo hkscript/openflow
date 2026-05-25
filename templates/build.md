@@ -25,14 +25,17 @@ description: Test-first implementation driven by test-plan.md — generate test 
 
 ## 流程
 
-### 0. 依赖检测
+### 0. 前置检查
 
-| 依赖 | 检测方式 | 不可用时 |
-|------|----------|----------|
-| Superpowers writing-plans | skills 目录下是否存在 `writing-plans/SKILL.md` | 降级为按 plan-ready.md 逐 task 手动执行，但仍遵循 TDD 顺序 |
-| 测试框架 | 检查项目 `package.json`/`go.mod`/`Cargo.toml` 等 | 提示用户先配置测试框架 |
+**以下依赖必须全部满足，缺一不可：**
 
-如果 Superpowers 可用，调用 `writing-plans` skill 以 test-plan.md + plan-ready.md 为输入，生成符合本项目技术栈的详细步骤。
+1. **Superpowers writing-plans** — skills 目录下必须存在 `writing-plans/SKILL.md`
+2. **测试框架** — 项目必须有可运行的测试框架（pytest/jest/go test/cargo test）
+
+任一不满足，报错终止：
+> "❌ build 阶段需要 Superpowers writing-plans 和项目测试框架。缺失: [列表]。请先安装缺失的依赖，然后重试。"
+
+调用 `writing-plans` skill 以 test-plan.md + plan-ready.md 为输入，生成符合本项目技术栈的详细步骤。
 
 ### 1. 检测状态
 

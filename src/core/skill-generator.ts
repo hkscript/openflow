@@ -4,7 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { fileExists } from '../utils/shell.js';
 import { logger } from '../utils/logger.js';
-import { SKILL_NAME, TOOL_PATHS, DEPS } from './constants.js';
+import { SKILL_NAME, TOOL_PATHS } from './constants.js';
 import type { DepStatus } from './dependency-check.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -148,17 +148,7 @@ function generateSkillFile(skillsDir: string, filename: string, depStatus: DepSt
     content = getInlineTemplate(filename, depStatus);
   }
 
-  // Inject runtime dependency checks into build.md
-  if (filename === 'build.md') {
-    content = injectRuntimeDepCheck(content, depStatus);
-  }
-
-  // Inject runtime dependency checks into brainstorming.md for Superpowers
-  if (filename === 'brainstorming.md') {
-    content = injectBrainstormingDepCheck(content, depStatus);
-  }
-
-  // Inject runtime dependency checks into spec.md for OpenSpec
+  // Inject validation hint into spec.md for OpenSpec CLI
   if (filename === 'spec.md') {
     content = injectSpecRuntimeCheck(content, depStatus);
   }
@@ -166,36 +156,6 @@ function generateSkillFile(skillsDir: string, filename: string, depStatus: DepSt
   const targetPath = path.join(skillsDir, filename);
   fs.writeFileSync(targetPath, content);
   logger.step(`  ${filename}`);
-}
-
-function injectRuntimeDepCheck(content: string, depStatus: DepStatus): string {
-  const checkSection = [
-    '',
-    '### 0. 依赖检测',
-    '',
-    '执行前检查以下依赖是否可用：',
-    '',
-    '| 依赖 | 检测方式 | 不可用时 |',
-    '|------|----------|----------|',
-    '| Superpowers writing-plans | 当前工具的本地或全局 skills 目录下是否存在 `writing-plans/SKILL.md` | 降级为按 test-plan.md + plan-ready.md 逐 task 手动执行，仍遵循 TDD 顺序 |',
-    '| OpenSpec CLI | `openspec` 命令是否可执行 | 不影响 build 阶段，但 close 阶段归档需手动 mv |',
-    '| 测试框架 | 检查 `package.json`/`go.mod`/`Cargo.toml` 等 | 提示用户先配置测试框架 |',
-    '',
-    '如果 Superpowers 不可用，提示用户：',
-    '> "Superpowers 未安装，build 将使用手动执行模式。安装后体验更佳：' + DEPS.superpowers.installHint + '"',
-    '',
-    '如果 Superpowers 可用，调用其 `writing-plans` skill 以 test-plan.md + plan-ready.md 为输入生成详细执行计划。',
-    '',
-  ].join('\n');
-
-  const lines = content.split('\n');
-  const firstH2Idx = lines.findIndex((l) => l.startsWith('## '));
-  if (firstH2Idx >= 0) {
-    lines.splice(firstH2Idx + 1, 0, checkSection);
-  } else {
-    lines.unshift(checkSection);
-  }
-  return lines.join('\n');
 }
 
 function injectSpecRuntimeCheck(content: string, depStatus: DepStatus): string {
@@ -209,18 +169,6 @@ function injectSpecRuntimeCheck(content: string, depStatus: DepStatus): string {
   const validateIdx = lines.findIndex((l) => l.includes('openspec validate'));
   if (validateIdx >= 0) {
     lines.splice(validateIdx, 0, checkNote);
-  }
-  return lines.join('\n');
-}
-
-function injectBrainstormingDepCheck(content: string, depStatus: DepStatus): string {
-  const installHint = DEPS.superpowers.installHint;
-  const hintLine = 'Superpowers 不可用时，提示用户：';
-  const lines = content.split('\n');
-  const hintIdx = lines.findIndex((l) => l.includes(hintLine));
-  if (hintIdx >= 0 && hintIdx + 1 < lines.length) {
-    // Replace the placeholder hint with the actual install command
-    lines[hintIdx + 1] = '> "Superpowers brainstorming 未安装，将使用手动提问模式。安装：' + installHint + '"';
   }
   return lines.join('\n');
 }

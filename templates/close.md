@@ -179,13 +179,6 @@ openspec validate <变更名> --strict
 openspec archive <变更名> --yes
 ```
 
-如果 OpenSpec CLI 不可用，手动归档：
-
-```bash
-mkdir -p openspec/changes/archive
-mv openspec/changes/<变更名> openspec/changes/archive/$(date +%Y-%m-%d)-<变更名>/
-```
-
 ### 9. 完成提示
 
 > "变更 '<变更名>' 已验证（N/N 测试通过，100% 场景覆盖），经验已提取到 lessons.md，已归档。下次类似变更将自动检索到这些经验。"
