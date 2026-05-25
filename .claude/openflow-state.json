@@ -1,6 +1,6 @@
 {
   "openspec": true,
-  "superpowers": true,
+  "superpowers": false,
   "openspecProjectInitialized": true,
   "createdAt": "2026-05-14T10:21:48.147Z",
   "tools": [
