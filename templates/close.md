@@ -87,8 +87,18 @@ cargo test        # Rust
 如果有不一致或未覆盖：
 - **不在 close 阶段改代码**
 - 写入 `openspec/changes/<变更名>/close-issues.md`
-- 提示用户：
-  > "发现 N 个问题，已记录到 close-issues.md。是否需要开启新变更修复？"
+
+根据问题类型选择恢复路径：
+
+| 问题 | 下一步 |
+|------|--------|
+| 测试 FAIL（实现 bug） | 回到 `/openflow build` — 从 test-plan.md 中第一个 FAIL 的测试继续 |
+| 覆盖率 < 100%（遗漏 scenario） | 回到 `/openflow amend` — 补充 scenario，重新生成 test-plan.md |
+| 设计不一致（代码偏离 design.md） | 回到 `/openflow amend` — 更新 design.md 并追加 task |
+| 测试本身有问题（测错了东西） | 回到 `/openflow build` — 修正测试，重新验证 |
+
+提示用户：
+> "发现 N 个问题，已记录到 close-issues.md。建议：<上述对应恢复路径>。"
 
 ### 6. Compound：提取可复用经验（知识沉淀）
 

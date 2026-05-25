@@ -71,7 +71,7 @@ OpenSpec scenarios ──→ test-plan.md (场景→测试映射) ──→ Supe
 | `proposal.md` | proposal / brainstorming | 需求描述 |
 | `design.md` | spec | 技术方案 |
 | `specs/*.md` | spec | 结构化规格（requirement + scenario） |
-| `tasks.md` | spec | OpenSpec 任务清单 |
+| `tasks.md` | close (自动派生) | OpenSpec 格式约定，从 plan-ready.md 一行 grep+sed 生成 |
 | **`test-plan.md`** | **spec** | **场景→测试映射表（执行期桥梁）** |
 | `plan-ready.md` | spec | 实现计划（每 task 绑定测试编号） |
 | `docs/superpowers/plans/*.md` | build | Superpowers 详细执行计划 |
@@ -123,7 +123,8 @@ OpenSpec scenarios ──→ test-plan.md (场景→测试映射) ──→ Supe
 
 判定结果：
 - 无活跃变更 → proposal 阶段
-- 有活跃变更但无 test-plan.md → spec 阶段（补生成）
+- **有 2+ 个活跃变更 → 列出所有变更让用户选择，然后根据选中变更的状态继续路由**
+- 有 1 个活跃变更但无 test-plan.md → spec 阶段（补生成）
 - 有 test-plan.md 但实现未开始 → build 阶段
 - 实现进行中（部分测试 PASS） → 继续 build 阶段（断点恢复）
 - 实现已完成（所有测试 PASS） → close 阶段

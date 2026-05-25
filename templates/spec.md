@@ -171,8 +171,11 @@ openspec validate <变更名> --strict
 
 ### 7. 提示下一步
 
-> "规格已确认，test-plan.md（N 个场景映射到 M 个测试用例）和 plan-ready.md 已生成。
-> 接下来用 `/openflow build` 开始 TDD 实现——每个 task 都会先写测试再写代码。"
+> "规格已确认，test-plan.md（N 个场景映射到 M 个测试用例）和 plan-ready.md 已生成。"
+> 
+> **审批门（不可跳过）：** 在用户明确批准 design.md 和 plan-ready.md 之前，**不得进入 build 阶段**。即使用户说"开始写代码"或"就这样做"，也必须先把规格摘要展示给用户并等待确认。
+>
+> 审批确认后提示："> 接下来用 `/openflow build` 开始 TDD 实现——每个 task 都会先写测试再写代码。"
 
 ## 关键原则
 

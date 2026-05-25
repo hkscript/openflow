@@ -133,7 +133,7 @@ function mergeHooksConfig(settingsFile: string, hookScriptPath: string): void {
   }
 
   fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n');
-  logger.step(`  Hooks registered in ${path.basename(settingsFile)}: Edit, Write → openflow-enforce.sh`);
+  logger.step(`  Hooks registered in ${path.basename(settingsFile)}: Edit, Write → openflow-enforce.py`);
 }
 
 function generateSkillFile(skillsDir: string, filename: string, depStatus: DepStatus): void {
