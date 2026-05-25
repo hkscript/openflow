@@ -49,6 +49,8 @@ description: Call OpenSpec to generate specs + translate to plan-ready.md, auto-
 
 做完以上检查后再进入第 3 步生成 OpenSpec 文件。
 
+**确定性检查（必做，进入步骤 3 之前）：** 汇总所有 `[Assumption]` 和 `[Unknown]` 标签的条目，逐条消解或标记。对于 design.md 中将引用的任何文件路径/模块名/函数名，必须确认其存在（未读不用铁律）。
+
 ### 3. 生成 OpenSpec 规格文件
 
 根据 proposal.md 的内容生成或补齐以下文件：
@@ -143,16 +145,23 @@ openspec validate <变更名> --strict
 - 测试计划：openspec/changes/<变更名>/test-plan.md
 ```
 
-每个 task 必须包含三个新字段：
+每个 task 必须包含以下字段：
 
 ```markdown
 ### Task 1: <任务名>
 - 目标：<做什么>
-- 改动文件：<哪些文件>
+- 改动文件：<文件路径 [Verified] 或 [Assumption: 需确认路径]>
 - 覆盖场景：<test-plan.md 中的 #编号，如 #1, #2>
-- 测试先行：<先写哪个测试，在哪个文件>
+- 测试先行：<先写哪个测试，在哪个文件 [Verified]>
 - 验证方式：<运行什么测试命令，预期结果>
+- 确定性：<[Verified] / [Inferred] / [Assumption] — 本 task 的整体确定性>
 ```
+
+**确定性标签规则：**
+- `[Verified]` = 所有改动文件和测试文件路径均已通过 grep/Read 确认存在
+- `[Inferred]` = 路径从现有代码模式推导，但未逐文件确认
+- `[Assumption]` = 至少一个文件路径是猜测的——build 阶段执行前必须先确认
+- 如果 task 有 ≥2 个 `[Assumption]`，应拆分或回到步骤 2 补读代码
 
 **翻译规则：**
 1. 每个 task 必须绑定至少 1 个 test-plan 场景编号

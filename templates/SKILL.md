@@ -7,6 +7,47 @@ description: "OpenSpec + Superpowers workflow orchestrator. Bridges requirements
 
 根据用户调用的子命令和项目当前状态，路由到对应阶段。
 
+## 反幻觉铁律
+
+**所有阶段都必须遵守的四条铁律。** 违反了这些，OpenSpec 和 Superpowers 的流程再严谨也没用——因为输入本身就是编的。
+
+### 铁律 1：未读不用（No-Read-No-Use）
+
+引用任何文件路径、函数名、类名、API 端点、环境变量之前，**必须能用 grep/Read 证明它真的存在**。
+
+- 在 design.md 写 "使用 `src/utils/cache.py` 中的 LRU 缓存" → 先 `grep "cache\|lru" src/` 确认
+- 在 plan-ready.md 写 "改动文件：`src/auth/login.py`" → 先 `ls` 或 `grep` 确认路径存在
+- 在 test-plan.md 写测试文件路径 → 先检查项目测试目录结构
+
+如果 grep 返回 0 结果，**必须说 "X 不存在" 而不是假设它存在**。
+
+### 铁律 2：不确定就说（Certainty Tags）
+
+每一条技术判断必须标注确定性：
+
+| 标签 | 含义 | 示例 |
+|------|------|------|
+| `[Verified]` | 通过 grep/Read 确认过 | `[Verified] src/auth/login.py:42 使用了 bcrypt` |
+| `[Inferred]` | 从现有代码逻辑推导 | `[Inferred] 根据 config.py 的模式，新配置应放在 config/auth.py` |
+| `[Assumption]` | 基于常识推测，未验证 | `[Assumption] pytest 已安装在开发环境` |
+| `[Unknown]` | 无法确定，需要用户输入 | `[Unknown] 项目用的是哪个 ORM？` |
+
+`[Assumption]` 和 `[Unknown]` 标签的条目是**高风险区**——在 build 阶段执行前必须尽可能消解。
+
+### 铁律 3：反对自己（Devil's Advocate）
+
+在以下节点，必须先提出最强反方论点再继续：
+- 确认设计方案前（brainstorming/spec）：**"这个方案最大的风险是什么？什么情况下会失败？"**
+- 用户说"就这样做"时（proposal）：**"有没有可能是另一种情况？"**
+- 测试全部通过时（close）：**"有没有可能测试覆盖了错误的场景？"**
+
+### 铁律 4：重复即错误（Sunk-Cost Detector）
+
+同一个问题尝试了 2 次还没解决：
+- 第 3 次尝试**必须换一种完全不同的方法**
+- 不能只是微调参数或换措辞重试
+- 先退一步质疑自己的假设：**"我对这个问题的理解有没有可能从根上就错了？"**
+
 ## 核心设计理念
 
 ```

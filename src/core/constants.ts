@@ -19,10 +19,12 @@ export const DEPS = {
   },
 } as const;
 
-export const TOOL_PATHS: Record<string, { skillsDir: string; commandsDir?: string }> = {
+export const TOOL_PATHS: Record<string, { skillsDir: string; commandsDir?: string; hooksDir?: string; settingsFile?: string }> = {
   claude: {
     skillsDir: '.claude/skills',
     commandsDir: '.claude/commands',
+    hooksDir: '.claude/hooks',
+    settingsFile: '.claude/settings.json',
   },
   codex: {
     skillsDir: '.codex/skills',

@@ -53,6 +53,11 @@ description: Test-first implementation driven by test-plan.md — generate test 
 2. **读现有测试文件**：如果目标文件已有对应测试（如 `src/auth/login.py` → `tests/auth/test_login.py`），先读懂现有测试的模式——mock 方式、断言风格、fixture 约定
 3. **读一个类似的完整测试用例**：如果项目已有类似功能的测试，挑一个完整的当模板——测试桩的风格必须和它一致
 
+**未读不用检查（必做，进入步骤 3 前）：**
+- plan-ready.md 中每个 task 的 `[Assumption]` 路径必须逐个 grep/Read 确认
+- 无法确认的路径**不能**在测试桩中使用——先退回到 spec 或 amend
+- 如果 task 的确定性标签是 `[Assumption]`，必须先消解为 `[Verified]` 或 `[Inferred]`
+
 做完以上检查后，你写的测试桩才能和项目现有测试风格一致，不会产生"这个测试看起来像是另一个项目写的"的问题。
 
 ### 3. 生成测试桩（test stubs）

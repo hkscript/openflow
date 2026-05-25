@@ -13,6 +13,9 @@ const __dirname = path.dirname(__filename);
 // Resolve templates dir: from dist/core/ → ../../templates/
 const TEMPLATES_DIR = path.resolve(__dirname, '..', '..', 'templates');
 
+// Resolve hooks dir: from dist/core/ → ../../hooks/
+const HOOKS_DIR = path.resolve(__dirname, '..', '..', 'hooks');
+
 export interface GenerateOptions {
   cwd: string;
   tools: string[];
@@ -52,7 +55,85 @@ export function generateSkills(options: GenerateOptions): void {
     }
 
     logger.success(`${tool} skills generated`);
+
+    // Install enforcement hooks (Claude Code only)
+    if (tool === 'claude' && !global && toolPaths.hooksDir && toolPaths.settingsFile) {
+      installHooks(baseDir, toolPaths);
+    }
   }
+}
+
+function installHooks(baseDir: string, toolPaths: typeof TOOL_PATHS['claude']): void {
+  const hooksDir = path.join(baseDir, toolPaths.hooksDir!);
+  const settingsFile = path.join(baseDir, toolPaths.settingsFile!);
+  const hookScriptSrc = path.join(HOOKS_DIR, 'enforce.py');
+  const hookScriptDest = path.join(hooksDir, 'openflow-enforce.py');
+
+  if (!fileExists(hookScriptSrc)) {
+    logger.warn('Hook script not found, skipping enforcement hooks setup');
+    return;
+  }
+
+  // Create hooks directory
+  if (!fs.existsSync(hooksDir)) {
+    fs.mkdirSync(hooksDir, { recursive: true });
+  }
+
+  // Copy hook script
+  fs.copyFileSync(hookScriptSrc, hookScriptDest);
+  fs.chmodSync(hookScriptDest, 0o755);
+  logger.step(`  Hook installed: ${path.relative(baseDir, hookScriptDest)}`);
+
+  // Merge hooks into settings.json
+  mergeHooksConfig(settingsFile, hookScriptDest);
+}
+
+function mergeHooksConfig(settingsFile: string, hookScriptPath: string): void {
+  let settings: any = {};
+
+  if (fileExists(settingsFile)) {
+    try {
+      const raw = fs.readFileSync(settingsFile, 'utf-8');
+      settings = JSON.parse(raw);
+    } catch {
+      logger.warn('Could not parse existing settings.json, creating new');
+    }
+  }
+
+  // Initialize hooks structure
+  if (!settings.hooks) settings.hooks = {};
+  if (!settings.hooks.PreToolUse) settings.hooks.PreToolUse = [];
+
+  const preHooks: any[] = settings.hooks.PreToolUse;
+
+  // Check if openflow hook already registered
+  const hookMatchers = ['Edit', 'Write'];
+  for (const matcher of hookMatchers) {
+    const existing = preHooks.find((h: any) => h.matcher === matcher);
+    const newHook = {
+      type: 'command',
+      command: hookScriptPath,
+    };
+
+    if (existing) {
+      // Add hook if not already present
+      const exists = existing.hooks?.some(
+        (h: any) => h.command === hookScriptPath
+      );
+      if (!exists) {
+        existing.hooks = existing.hooks || [];
+        existing.hooks.push(newHook);
+      }
+    } else {
+      preHooks.push({
+        matcher,
+        hooks: [newHook],
+      });
+    }
+  }
+
+  fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n');
+  logger.step(`  Hooks registered in ${path.basename(settingsFile)}: Edit, Write → openflow-enforce.sh`);
 }
 
 function generateSkillFile(skillsDir: string, filename: string, depStatus: DepStatus): void {
@@ -153,6 +234,13 @@ function getInlineTemplate(filename: string, depStatus: DepStatus): string {
       '---',
       '',
       '# openflow',
+      '',
+      '## 反幻觉铁律',
+      '',
+      '1. 未读不用：引用任何文件/函数/API 前必须 grep/Read 确认存在',
+      '2. 不确定就说：[Verified] [Inferred] [Assumption] [Unknown] 标签标注每一条判断',
+      '3. 反对自己：确认方案/通过测试前先提出最强反方论点',
+      '4. 重复即错误：同一问题 2 次未解决→第 3 次必须换方法',
       '',
       '## 核心设计理念',
       '',

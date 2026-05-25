@@ -29,21 +29,24 @@ close 阶段不允许顺手修代码。发现差异只记录到 `close-issues.md
 - 有未完成测试 → 提示：
   > "test-plan.md 中还有 N 个测试未标记完成。请先用 /openflow build 完成实现。"
 
-### 2. 运行全量测试（自动化验证）
+### 2. 运行全量测试（自动化验证，不可跳过）
+
+**这是 close 阶段最重要的步骤。** 不是检查 test-plan.md 的 PASS 标记，而是**真的在终端里跑命令看输出**。
 
 ```bash
 # 根据项目类型自动选择命令
 npm test          # Node
-pytest            # Python
+pytest -v         # Python
 go test ./...     # Go
 cargo test        # Rust
 ```
 
-**这是 close 阶段的核心验证——不是 AI 肉眼对比，而是真实的测试执行。**
+**必须把命令的实际输出贴出来。** 不能用 "应该都通过了" 这种话——看到哪里 FAIL 就是 FAIL，看到全部 PASS 才算通过。
 
 检查输出：
 - 全部测试 PASS → ✅
-- 有 FAIL → ❌，记录到 close-issues.md，停止归档
+- 有一个 FAIL → ❌，记录到 close-issues.md，**停止归档**
+- 测试没跑（环境问题）→ ❌，修复环境后重跑，不能跳过
 
 ### 3. 验证场景覆盖率
 
@@ -55,7 +58,13 @@ cargo test        # Rust
 
 如果覆盖率 < 100%，列出缺失的场景并记录到 close-issues.md。
 
-如果覆盖率 = 100% 且全部 PASS：
+如果覆盖率 = 100% 且全部 PASS，在宣布完成之前先做反幻觉检查：
+
+> "测试全部通过了。但——有没有可能测试测了错误的场景？有没有 scenario 的验收条件实际上没有被测试覆盖到，只是形式上 PASS 了？有没有边界条件在 specs/ 里写了但 test-plan.md 漏了？"
+
+如果以上任何问题的答案是"有可能"，回到 amend 补充测试或修改 scenario，不能直接归档。
+
+如果确认无误：
 
 > "✅ 所有 N 个 scenario 均有对应测试且全部通过——实现与需求一致。"
 
