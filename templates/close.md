@@ -1,68 +1,142 @@
 ---
 name: openflow/close
-description: Verify implementation consistency and archive
+description: Verify test coverage against spec scenarios and archive — tests passing = requirements met
 ---
 
-# Close: 验证归档
+# Close: 测试覆盖验证 + 归档
 
 ## 目标
 
-验证代码实现与设计文档一致，确认规格变更全部体现，然后归档。
+以测试为证——验证每个 scenario 都有对应的 PASS 测试，确认实现与规格一致，然后归档。
 
 ## 中断续接规则
 
-如果用户在 close 阶段被打断后继续回复、说“继续”、或要求完成归档，保持 close 阶段并继续验证/归档。close 阶段不允许顺手修代码；发现差异只记录到 `close-issues.md`。
+close 阶段不允许顺手修代码。发现差异只记录到 `close-issues.md`，不开新的实现分支。
 
 ## 前置条件
 
 - `docs/superpowers/plans/` 下的实现计划全部 checkbox 已勾选
+- `openspec/changes/<变更名>/test-plan.md` 存在且所有测试标记为 PASS
 - `openspec/changes/<变更名>/plan-ready.md` 存在
 
 ## 流程
 
-### 1. 确认实现状态
+### 1. 确认测试状态
 
-检查 `docs/superpowers/plans/` 下对应的计划文件，确认所有 checkbox 已勾选。
+读取 `test-plan.md`，检查所有测试行状态：
 
-如果有未完成的 task：
-> "还有 N 个任务未完成。请先用 /openflow build 完成实现。"
+- 全部 `✅ PASS` → 继续验证
+- 有未完成测试 → 提示：
+  > "test-plan.md 中还有 N 个测试未标记完成。请先用 /openflow build 完成实现。"
 
-### 2. 验证设计一致性
+### 2. 运行全量测试（自动化验证）
 
-读取 `openspec/changes/<变更名>/design.md`，逐项检查代码实现：
+```bash
+# 根据项目类型自动选择命令
+npm test          # Node
+pytest            # Python
+go test ./...     # Go
+cargo test        # Rust
+```
 
-- design.md 中的技术决策是否在代码中体现？
-- 标记的架构选择是否与代码结构一致？
+**这是 close 阶段的核心验证——不是 AI 肉眼对比，而是真实的测试执行。**
 
-对每一项，给出判定：✅ 一致 / ❌ 不一致（附具体差异）
+检查输出：
+- 全部测试 PASS → ✅
+- 有 FAIL → ❌，记录到 close-issues.md，停止归档
 
-### 3. 验证规格完整性
+### 3. 验证场景覆盖率
 
-读取 `openspec/changes/<变更名>/specs/` 目录，检查每个规格变更：
+对比 `test-plan.md` 的映射表和 specs/ 中的 scenario 总数：
 
-- 标记为"新增"的功能是否已实现？
-- 标记为"修改"的行为是否已更新？
-- 标记为"删除"的旧逻辑是否已移除？
+```
+覆盖率 = test-plan.md 中的测试数 / specs/ 中的 scenario 总数
+```
 
-对每一项，给出判定：✅ 已体现 / ❌ 未体现（附具体缺失）
+如果覆盖率 < 100%，列出缺失的场景并记录到 close-issues.md。
 
-### 4. 处理不一致
+如果覆盖率 = 100% 且全部 PASS：
 
-如果发现不一致：
+> "✅ 所有 N 个 scenario 均有对应测试且全部通过——实现与需求一致。"
+
+### 4. 验证设计一致性（补充检查）
+
+虽然测试通过是主要验证手段，仍做轻量设计一致性检查：
+
+先读关键代码文件，再对比 `design.md`：
+
+1. **读取 design.md 中提到的关键文件**：设计文档中标注的核心模块、接口文件，打开快速浏览
+2. **对比关键决策**：
+   - 模块划分是否与设计一致？
+   - 关键接口是否符合 design.md 约定？
+3. **不一致的处理**：记录到 close-issues.md，不阻塞归档（以测试通过为准）
+
+不一致项记录到 close-issues.md，不阻塞归档（以测试通过为准）。
+
+### 5. 处理不一致
+
+如果有不一致或未覆盖：
 - **不在 close 阶段改代码**
-- 将不一致项记录到 `openspec/changes/<变更名>/close-issues.md`
+- 写入 `openspec/changes/<变更名>/close-issues.md`
 - 提示用户：
-  > "发现 N 处不一致，已记录到 close-issues.md。是否需要开启新的变更来修复？"
+  > "发现 N 个问题，已记录到 close-issues.md。是否需要开启新变更修复？"
 
-### 5. 归档
+### 6. Compound：提取可复用经验（知识沉淀）
 
-全部一致（或用户接受不一致项）后，先校验变更：
+**这是让每个变更产生复利的关键步骤。** 不能只归档文档——要把这次踩的坑、验证有效的模式提取出来，让下一次 proposal/spec 阶段自动检索到。
+
+回顾本次变更，写 `openspec/changes/<变更名>/lessons.md`：
+
+```markdown
+# 经验记录：<变更名>
+
+## 设计决策
+
+<!-- 哪些设计选择被验证是正确的？哪些需要重新考虑？ -->
+
+| 决策 | 结果 | 说明 |
+|------|------|------|
+| 使用 Redis 缓存 session | ✅ 正确 | 命中率 95%，延迟降低 80% |
+| 前端直接调用第三方 API | ❌ 应在后端代理 | 暴露了 API key，下次需要改 |
+
+## 测试模式
+
+<!-- 哪些测试模式有效？哪些不够？ -->
+
+| 模式 | 效果 | 代码位置 |
+|------|------|----------|
+| fixture 预填充测试数据 | ✅ 有效 | tests/conftest.py |
+| mock 外部 API 调用 | ✅ 有效 | tests/test_auth.py |
+
+## 踩过的坑
+
+<!-- 下次做类似变更时，应该避免什么？ -->
+
+1. **数据库迁移与代码部署顺序**：先加列（允许 NULL），部署代码，再回填数据，最后加 NOT NULL。本次先加了 NOT NULL 导致部署失败。
+2. **测试中时区问题**：CI 服务器 UTC 与本机时区不一致，测试断言用绝对时间会 flaky。应使用相对时间或 freeze time。
+
+## 可复用代码模式
+
+<!-- 有没有值得后续参考的通用模式？ -->
+
+- `src/utils/retry.py`：带指数退避的重试装饰器，适合所有外部 API 调用
+```
+
+**写 lessons.md 的原则：**
+- 不要流水账——只记对下一次有指导意义的
+- 每条记录要具体到文件路径、代码行、数字
+- 用表格和列表，方便 grep 和 AI 解析
+- 如果本次变更规模很小、没有可提取的，可以写 "无特别经验"
+
+### 7. 归档
+
+全部通过后，先校验：
 
 ```bash
 openspec validate <变更名> --strict
 ```
 
-校验通过后执行归档：
+校验通过后归档：
 
 ```bash
 openspec archive <变更名> --yes
@@ -75,17 +149,13 @@ mkdir -p openspec/changes/archive
 mv openspec/changes/<变更名> openspec/changes/archive/$(date +%Y-%m-%d)-<变更名>/
 ```
 
-归档后确认：
-- 规格增量已合并到主规格库（如适用）
-- 变更记录已移到 archive 目录
+### 8. 完成提示
 
-### 6. 完成提示
-
-> "变更 '<变更名>' 已验证并归档。可以开始下一个变更了。"
+> "变更 '<变更名>' 已验证（N/N 测试通过，100% 场景覆盖），经验已提取到 lessons.md，已归档。下次类似变更将自动检索到这些经验。"
 
 ## 关键原则
 
+- **测试通过 = 需求满足** — 这是 close 验证的核心理念。不必猜测代码是否实现了规格，测试结果说明一切
 - close 阶段不做代码修改，只做验证和归档
-- 本阶段只允许写归档、验证记录或 `close-issues.md`；禁止修改任何代码或实现文件
-- 不一致先记录，不现场修复
-- 防止边写代码边改需求的恶性循环
+- 不一致先记录到 close-issues.md，不现场修复
+- test-plan.md 是 close 验证的 checklist——每行对应一个可验证的事实
