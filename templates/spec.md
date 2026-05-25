@@ -58,20 +58,7 @@ description: Call OpenSpec to generate specs + translate to plan-ready.md, auto-
 - `openspec/changes/<变更名>/proposal.md` — 已存在，可补充
 - `openspec/changes/<变更名>/design.md` — 技术方案
 - `openspec/changes/<变更名>/specs/` — 具体规格变更（标记新增/修改/删除）
-- `openspec/changes/<变更名>/tasks.md` — 实现任务清单（**自动从 plan-ready.md 派生，不独立维护**）
-
-tasks.md 格式——只维护一份任务列表，从 plan-ready.md 提取：
-
-```markdown
-## 1. Implementation
-<!-- 自动镜像 plan-ready.md 的任务列表，由 openflow hook 自动同步 -->
-
-- [ ] Task 1: <从 plan-ready.md 提取的任务名>
-- [ ] Task 2: <从 plan-ready.md 提取的任务名>
-...
-```
-
-**原则：tasks.md 是 plan-ready.md 的简化镜像。build 阶段每完成一个 task，openflow hook 会自动同步两个文件的 checkbox 状态。AI 不需要手动维护 tasks.md。**
+- `openspec/changes/<变更名>/tasks.md` — 占位，close 阶段从 plan-ready.md 自动生成，无需手动维护
 
 **关键要求**：specs/ 中每个 requirement 必须至少有一个 `#### Scenario:`，且 scenario 描述必须包含**可验证的预期行为**（给定-当-那么 或 输入-输出 格式）。这是后续自动生成测试计划的输入源。
 

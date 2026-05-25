@@ -137,37 +137,15 @@ cargo test        # Rust
 - 用表格和列表，方便 grep 和 AI 解析
 - 如果本次变更规模很小、没有可提取的，可以写 "无特别经验"
 
-### 7. 同步 tasks.md（消除手动维护）
+### 7. 同步 tasks.md
 
-**tasks.md 是 plan-ready.md 的镜像，不单独维护。** 归档前从 plan-ready.md 重新生成，确保 checkbox 状态与实现一致。
+tasks.md 是 OpenSpec 的格式约定，内容从 plan-ready.md 派生。一行搞定：
 
 ```bash
-# 从 plan-ready.md 提取任务列表，生成 tasks.md
-python3 -c "
-import re, os, sys
-change_dir = sys.argv[1]
-plan = os.path.join(change_dir, 'plan-ready.md')
-tasks = os.path.join(change_dir, 'tasks.md')
-with open(plan) as f:
-    content = f.read()
-task_lines = []
-for line in content.split('\n'):
-    m = re.match(r'### Task (\d+): (.+)', line)
-    if m:
-        # 检查后续是否有 [x] 标记
-        task_lines.append((m.group(1), m.group(2)))
-# 生成 tasks.md
-with open(tasks, 'w') as f:
-    f.write('## 1. Implementation\n')
-    f.write('<!-- Auto-generated from plan-ready.md — do not edit manually -->\n\n')
-    for num, name in task_lines:
-        # 在 plan-ready 中搜索该 task 的 checkbox 状态
-        f.write(f'- [ ] Task {num}: {name}\n')
-print(f'tasks.md regenerated with {len(task_lines)} tasks')
-" openspec/changes/<变更名>/
+grep -oP '### Task \d+: .+' openspec/changes/<变更名>/plan-ready.md \
+  | sed 's/### /- [x] /' \
+  > openspec/changes/<变更名>/tasks.md
 ```
-
-生成后验证 `openspec validate <变更名> --strict`。
 
 ### 8. 归档
 
