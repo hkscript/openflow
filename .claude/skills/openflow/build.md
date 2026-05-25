@@ -77,10 +77,11 @@ docs/superpowers/plans/YYYY-MM-DD-<变更名>.md
 
 按照 Superpowers 的执行流程：
 
-1. **TDD 铁律**：先写失败测试，再写实现代码
+1. **先验证后实现**：新增功能先写失败测试再实现；修改已有逻辑优先运行现有测试验证回归
 2. **每个 task 一个 commit**
-3. 多任务可派子代理并行（参见 subagent-driven-development skill）
-4. 编译/测试不通过不让提交
+3. **每个 task 完成后同步更新 `tasks.md` checkbox**：将对应条目从 `- [ ]` 改为 `- [x]`，保持 OpenSpec 任务清单与实际进度一致
+4. 多任务可派子代理并行（参见 subagent-driven-development skill）
+5. 编译/测试不通过不让提交
 
 ### 5. 执行完成
 
