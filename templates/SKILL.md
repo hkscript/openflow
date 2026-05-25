@@ -87,7 +87,15 @@ OpenSpec scenarios ──→ test-plan.md (场景→测试映射) ──→ Supe
 4. 只有用户显式调用 `/openflow build`，或状态检测明确进入 build 阶段后，才允许修改代码或实现文件
 5. 中断后恢复时，先重新读取当前阶段文件、`openspec/changes/` 状态和 `test-plan.md`，再继续执行
 
-## 阶段写入边界
+## 阶段写入边界（提示词 + Hook 双重保障）
+
+以下写入规则有**两道防线**：
+1. **提示词层面**：AI 按要求自我约束
+2. **Hook 层面**：`openflow init` 安装的 PreToolUse hook 会在 Edit/Write 时自动拦截违规操作
+
+已安装的 hook 会拦截：编造不存在的文件路径、build 阶段修改规格文档。非阻断性警告：plan-ready.md 中出现 [Assumption] 标签、tasks.md 需要同步。
+
+详见 `.claude/hooks/openflow-enforce.py`。
 
 | 阶段 | 允许写入 | 禁止写入 |
 |------|----------|----------|
