@@ -124,7 +124,7 @@ Step 8: 更新 test-plan.md 中对应测试行的状态为 ✅
 **每完成一个 task，同步更新：**
 - `plan-ready.md` 中该 task checkbox → `[x]`
 - `test-plan.md` 中对应行 → 追加状态列 `✅ PASS`
-- `tasks.md`（OpenSpec）中对应任务 checkbox → `[x]`
+- `tasks.md` 会在 close 阶段从 plan-ready.md 自动重新生成，build 阶段无需手动维护
 
 ### 6. 全量回归
 

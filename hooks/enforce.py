@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """openflow enforcement hooks — 三道硬防火墙
-用法: 由 Claude Code hooks 机制自动调用，stdin 接收工具调用的 JSON
+用法: 由 Claude Code hooks 机制自动调用（PreToolUse），stdin 接收工具调用的 JSON
 返回值: 0 = 放行, 非0 = 拦截
 """
 
 import json
 import os
 import sys
+
 
 # ============================================================
 # 防火墙 1: 未读不用 — Edit 的对象必须存在
@@ -50,7 +51,6 @@ def check_certainty_tags(file_path, content):
 # 防火墙 3: 阶段写入边界 — build 阶段不能改规格文档
 # ============================================================
 def check_phase_boundary(file_path, cwd):
-    # 提取 change 目录
     if "openspec/changes/" not in file_path:
         return True
 
@@ -68,17 +68,15 @@ def check_phase_boundary(file_path, cwd):
     if not os.path.isfile(test_plan):
         return True
 
-    # 读取 test-plan.md，检查是否有未完成的测试
     try:
         with open(test_plan) as f:
-            content = f.read()
+            tp_content = f.read()
     except Exception:
         return True
 
-    has_pending = "TODO" in content or "FAIL" in content
-
+    has_pending = "TODO" in tp_content or "FAIL" in tp_content
     if not has_pending:
-        return True  # 不是 build 阶段（可能已经完成或还没开始）
+        return True
 
     # build 阶段的规格文件写保护
     protected_patterns = ["/specs/", "/proposal.md", "/design.md"]
@@ -88,6 +86,30 @@ def check_phase_boundary(file_path, cwd):
             print("   如果确实需要修改需求，请用 /openflow amend")
             return False
 
+    return True
+
+
+# ============================================================
+# 防火墙 4: tasks.md 同步提醒
+# ============================================================
+def check_tasks_sync(file_path, content, cwd):
+    """plan-ready.md 更新时提醒同步 tasks.md。"""
+    if "plan-ready.md" not in file_path:
+        return True
+
+    parent = os.path.dirname(os.path.join(cwd, file_path))
+    tasks_file = os.path.join(parent, "tasks.md")
+
+    if not os.path.isfile(tasks_file):
+        return True
+
+    # 检查是否是 checkbox 变更
+    if "[x]" not in content and "[ ]" not in content:
+        return True
+
+    print("💡 [openflow 防火墙 4: 状态同步] plan-ready.md checkbox 变化，请同步更新 tasks.md")
+    print(f"   tasks.md 路径: {tasks_file}")
+    print("   提示: close 阶段会从 plan-ready.md 自动重新生成 tasks.md，现在可以跳过手动同步。")
     return True
 
 
@@ -109,16 +131,19 @@ def main():
     if tool_name not in ("Edit", "Write"):
         sys.exit(0)
 
-    # 防火墙 1: 文件存在性
+    # 防火墙 1: 文件存在性（阻断）
     if not check_file_exists(tool_name, file_path, cwd):
         sys.exit(1)
 
-    # 防火墙 2: 确定性标签（仅警告，不阻断）
+    # 防火墙 2: 确定性标签（警告，不阻断）
     check_certainty_tags(file_path, content)
 
-    # 防火墙 3: 阶段边界
+    # 防火墙 3: 阶段边界（阻断）
     if not check_phase_boundary(file_path, cwd):
         sys.exit(1)
+
+    # 防火墙 4: tasks.md 同步提醒（提醒，不阻断）
+    check_tasks_sync(file_path, content, cwd)
 
     sys.exit(0)
 

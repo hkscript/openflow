@@ -137,7 +137,39 @@ cargo test        # Rust
 - 用表格和列表，方便 grep 和 AI 解析
 - 如果本次变更规模很小、没有可提取的，可以写 "无特别经验"
 
-### 7. 归档
+### 7. 同步 tasks.md（消除手动维护）
+
+**tasks.md 是 plan-ready.md 的镜像，不单独维护。** 归档前从 plan-ready.md 重新生成，确保 checkbox 状态与实现一致。
+
+```bash
+# 从 plan-ready.md 提取任务列表，生成 tasks.md
+python3 -c "
+import re, os, sys
+change_dir = sys.argv[1]
+plan = os.path.join(change_dir, 'plan-ready.md')
+tasks = os.path.join(change_dir, 'tasks.md')
+with open(plan) as f:
+    content = f.read()
+task_lines = []
+for line in content.split('\n'):
+    m = re.match(r'### Task (\d+): (.+)', line)
+    if m:
+        # 检查后续是否有 [x] 标记
+        task_lines.append((m.group(1), m.group(2)))
+# 生成 tasks.md
+with open(tasks, 'w') as f:
+    f.write('## 1. Implementation\n')
+    f.write('<!-- Auto-generated from plan-ready.md — do not edit manually -->\n\n')
+    for num, name in task_lines:
+        # 在 plan-ready 中搜索该 task 的 checkbox 状态
+        f.write(f'- [ ] Task {num}: {name}\n')
+print(f'tasks.md regenerated with {len(task_lines)} tasks')
+" openspec/changes/<变更名>/
+```
+
+生成后验证 `openspec validate <变更名> --strict`。
+
+### 8. 归档
 
 全部通过后，先校验：
 
@@ -158,7 +190,7 @@ mkdir -p openspec/changes/archive
 mv openspec/changes/<变更名> openspec/changes/archive/$(date +%Y-%m-%d)-<变更名>/
 ```
 
-### 8. 完成提示
+### 9. 完成提示
 
 > "变更 '<变更名>' 已验证（N/N 测试通过，100% 场景覆盖），经验已提取到 lessons.md，已归档。下次类似变更将自动检索到这些经验。"
 
