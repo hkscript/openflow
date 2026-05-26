@@ -60,6 +60,24 @@ description: Call OpenSpec to generate specs + translate to plan-ready.md, auto-
 - `openspec/changes/<变更名>/specs/` — 具体规格变更（标记新增/修改/删除）
 - `openspec/changes/<变更名>/tasks.md` — 占位，close 阶段从 plan-ready.md 自动生成，无需手动维护
 
+**Delta 操作类型选择规则：**
+
+在 `specs/<capability>/spec.md` 中使用 `## ADDED Requirements`、`## MODIFIED Requirements` 等操作头。选择规则：
+
+| 操作 | 使用条件 | 示例 |
+|------|----------|------|
+| `## ADDED` | 主 specs 目录中不存在该 capability | 新功能、新模块 |
+| `## MODIFIED` | 主 specs 目录中已存在该 capability，修改现有 requirement | 改现有功能行为 |
+| `## REMOVED` | 删除已有的 requirement | 废弃功能 |
+| `## RENAMED` | 仅改名，行为不变 | requirement 名称调整 |
+
+**判断方法**：生成前先检查 `openspec/specs/<capability>/spec.md` 是否存在：
+```bash
+ls openspec/specs/<capability>/spec.md 2>/dev/null && echo "存在，可 MODIFIED" || echo "不存在，必须 ADDED"
+```
+
+如果不确定是否存在，**默认用 ADDED**——openspec archive 会校验，MODIFIED 要求 target spec 必须存在。
+
 **关键要求**：specs/ 中每个 requirement 必须至少有一个 `#### Scenario:`，且 scenario 描述必须包含**可验证的预期行为**（给定-当-那么 或 输入-输出 格式）。这是后续自动生成测试计划的输入源。
 
 如果 OpenSpec CLI 可用，生成后运行校验：

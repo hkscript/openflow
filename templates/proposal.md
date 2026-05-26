@@ -60,6 +60,26 @@ mkdir -p openspec/changes/<变更名>/specs
 
 将确认的需求描述写入 `openspec/changes/<变更名>/proposal.md`。
 
+**proposal.md 格式要求（OpenSpec CLI 校验规则）：**
+
+```markdown
+## Why
+
+[1-2 句话说明问题/机会，至少 50 字符]
+
+## What Changes
+
+- [变更列表，用 bullet 列出]
+- [如有 breaking change，标记 **BREAKING**]
+
+## Impact
+
+- Affected specs: [涉及的 capability 列表]
+- Affected code: [关键文件/系统]
+```
+
+**必须使用英文标题**：`## Why` 和 `## What Changes`，不是中文 "为什么" 和 "做什么"。这是 openspec validate 和 openspec archive 的校验要求。
+
 ### 4. 提示下一步
 
 > "需求已记录。接下来可以用 `/openflow spec` 生成完整规格（包括测试计划和实现计划），或 `/openflow brainstorming` 进行深度设计。"
