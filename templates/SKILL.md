@@ -153,16 +153,20 @@ OpenSpec scenarios ──→ test-plan.md (场景→测试映射) ──→ Supe
 
 当用户输入 `/openflow` 不带子命令时：
 1. 执行状态检测（见上方状态检测表）
-2. 展示检测结果给用户：
+2. 使用 `AskUserQuestion` 弹出选择框，展示当前状态和建议阶段：
 
-> "检测结果：
-> - 活跃变更：`<变更名>`（1 个）
-> - test-plan.md：存在，N/M 测试 PASS
-> - 当前建议：**verify 阶段**
->
-> 你想执行哪个？"
+```
+header: "选择阶段"
+question: "检测结果：变更 `<变更名>`，N/M 测试 PASS。当前建议：verify。你想执行哪个？"
+options:
+  - label: "verify（建议）"  description: "验证闸门——全量测试+覆盖率+设计一致性"
+  - label: "build"           description: "继续实现"
+  - label: "amend"           description: "修改需求"
+  - label: "spec"            description: "生成规格"
+  - label: "close"           description: "归档"
+```
 
-3. 提供所有可用子命令作为选项，**由用户选择**，不自动路由
+3. 根据用户选择执行对应阶段，不自动路由
 
 ### 前置条件检查
 
