@@ -1,0 +1,24 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/hk/github/openflow/.claude/hooks/openflow-enforce.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/hk/github/openflow/.claude/hooks/openflow-enforce.py"
+          }
+        ]
+      }
+    ]
+  }
+}

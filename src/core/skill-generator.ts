@@ -56,8 +56,8 @@ export function generateSkills(options: GenerateOptions): void {
 
     logger.success(`${tool} skills generated`);
 
-    // Install enforcement hooks (Claude Code only)
-    if (tool === 'claude' && !global && toolPaths.hooksDir && toolPaths.settingsFile) {
+    // Install enforcement hooks (Claude Code only, project-local only)
+    if (tool === 'claude' && toolPaths.hooksDir && toolPaths.settingsFile) {
       installHooks(baseDir, toolPaths);
     }
   }
