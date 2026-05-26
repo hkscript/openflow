@@ -7,7 +7,24 @@ description: Verify test coverage against spec scenarios and archive — tests p
 
 ## 目标
 
-以测试为证——验证每个 scenario 都有对应的 PASS 测试，确认实现与规格一致，然后归档。
+以测试为证——先跑自动测试闸门，通过后再做人工验证，然后归档。
+
+## 正确顺序
+
+```
+build 完成
+  │
+  ├─ 1. 自动测试（fast gate，2秒出结果）
+  │       ├─ FAIL → 回到 build 修
+  │       └─ PASS → 继续
+  │
+  ├─ 2. 人工验证（启动应用、实际使用、边界探索）
+  │       ├─ 发现 bug → 回到 build 修
+  │       ├─ 需求遗漏 → /openflow amend
+  │       └─ 通过 → 继续
+  │
+  └─ 3. /openflow close（终验 + compound + archive）
+```
 
 ## 中断续接规则
 
