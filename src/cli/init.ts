@@ -42,7 +42,7 @@ export const initCommand = new Command('init')
         depStatus = checkDependencies({ cwd, tools }); // recheck
         if (ok) depStatus.openspec.autoInstalled = true;
       } else {
-        logger.warn('Skipped OpenSpec install — spec phase will use manual fallback');
+        logger.warn('Skipped OpenSpec install — some phases require openspec CLI');
       }
     } else {
       logger.success(`OpenSpec CLI installed${depStatus.openspec.version ? ` (v${depStatus.openspec.version})` : ''}`);
@@ -54,7 +54,7 @@ export const initCommand = new Command('init')
     if (!depStatus.superpowers.installed) {
       logger.warn('Superpowers not installed');
       logger.info(DEPS.superpowers.installHint);
-      logger.info('Re-run openflow init after installing, or build phase will use manual fallback');
+      logger.info('Re-run openflow init after installing Superpowers to enable all phases');
     } else {
       logger.success(`Superpowers installed${depStatus.superpowers.path ? ` (${depStatus.superpowers.path})` : ''}`);
     }
@@ -108,8 +108,8 @@ export const initCommand = new Command('init')
     logger.blank();
 
     if (!depStatus.superpowers.installed) {
-      logger.warn('Note: Superpowers not installed — /openflow build will use manual execution mode');
-      logger.info(`  Install with: ${DEPS.superpowers.installHint}`);
+      logger.warn('Note: Superpowers not installed — some phases will error without it');
+      logger.info(`  Install: ${DEPS.superpowers.installHint}`);
       logger.blank();
     }
 
