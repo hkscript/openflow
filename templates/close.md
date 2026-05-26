@@ -5,6 +5,14 @@ description: Compound lessons + archive — close only runs after verify passes,
 
 # Close: 经验沉淀 + 归档
 
+## 重要提醒
+
+**close 阶段不可自动续接**。如果上一轮 close 被中断，本轮必须：
+- 等待用户显式调用 `/openflow close`
+- 或按状态检测结果路由（弹出 AskUserQuestion 让用户选择阶段）
+
+不能因为用户说"继续"或其他回复而自动进入 close。归档是不可逆操作，每次都需要用户确认。
+
 ## 目标
 
 verify 已经通过，这一步只做三件事：提取经验 → 同步 tasks.md → 归档。不再做任何测试或验证。
