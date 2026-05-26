@@ -17,11 +17,24 @@ verify 已经通过，这一步只做三件事：提取经验 → 同步 tasks.m
 不满足时提示：
 > "请先完成 /openflow verify 验证。"
 
+## 执行要求
+
+**必须按顺序完成以下三个步骤，使用 TodoWrite 跟踪进度，每完成一步立即标记为 completed。**
+
+步骤标记格式：
+```
+activeForm: "生成 lessons.md"  → 完成后标记 completed
+activeForm: "同步 tasks.md"    → 完成后标记 completed
+activeForm: "执行归档命令"     → 完成后标记 completed
+```
+
+**绝对不能只生成 lessons.md 就结束。归档命令必须执行。**
+
 ## 流程
 
-### 1. Compound：提取可复用经验
+### 步骤 1：Compound — 提取可复用经验
 
-**这是让每个变更产生复利的关键步骤。** 不能只归档文档——要把这次踩的坑、验证有效的模式提取出来，让下一次 proposal/spec 阶段自动检索到。
+**必须使用 TodoWrite 标记此步骤为 in_progress，完成后标记为 completed。**
 
 回顾本次变更，写 `openspec/changes/<变更名>/lessons.md`：
 
@@ -30,15 +43,11 @@ verify 已经通过，这一步只做三件事：提取经验 → 同步 tasks.m
 
 ## 设计决策
 
-<!-- 哪些设计选择被验证是正确的？哪些需要重新考虑？ -->
-
 | 决策 | 结果 | 说明 |
 |------|------|------|
 | ... | ✅/❌ | ... |
 
 ## 测试模式
-
-<!-- 哪些测试模式有效？哪些不够？ -->
 
 | 模式 | 效果 | 代码位置 |
 |------|------|----------|
@@ -46,18 +55,14 @@ verify 已经通过，这一步只做三件事：提取经验 → 同步 tasks.m
 
 ## 踩过的坑
 
-<!-- 下次做类似变更时，应该避免什么？ -->
-
-1. **...**：...。
+1. **...**：...。解决方案：...
 
 ## 可复用代码模式
 
-<!-- 有没有值得后续参考的通用模式？ -->
-
-- `src/...`：...。
+- `src/...`：...
 ```
 
-**质量检查：**
+**质量检查（写入前必须确认）：**
 
 - [ ] "设计决策"表至少有一行
 - [ ] "踩过的坑"至少有一条——如果没有，确认：这次真的没有任何意外发现？
@@ -67,7 +72,13 @@ verify 已经通过，这一步只做三件事：提取经验 → 同步 tasks.m
 
 如果本次变更规模很小、没有可提取的，可以写 "无特别经验"。
 
-### 2. 同步 tasks.md
+**完成后立即 TodoWrite 标记此步骤 completed，然后继续步骤 2。**
+
+### 步骤 2：同步 tasks.md
+
+**必须使用 TodoWrite 标记此步骤为 in_progress，完成后标记为 completed。**
+
+执行以下命令（用 Bash 工具）：
 
 ```bash
 grep -oP '### Task \d+: .+' openspec/changes/<变更名>/plan-ready.md \
@@ -75,16 +86,36 @@ grep -oP '### Task \d+: .+' openspec/changes/<变更名>/plan-ready.md \
   > openspec/changes/<变更名>/tasks.md
 ```
 
-### 3. 归档
+**完成后立即 TodoWrite 标记此步骤 completed，然后继续步骤 3。**
+
+### 步骤 3：归档
+
+**必须使用 TodoWrite 标记此步骤为 in_progress。这是最关键的一步，绝对不能跳过。**
+
+执行归档命令（用 Bash 工具）：
 
 ```bash
 openspec validate <变更名> --strict
 openspec archive <变更名> --yes
 ```
 
-### 4. 完成
+**验证归档成功：**
 
-> "变更 '<变更名>' 已归档。经验已提取到 lessons.md，下次类似变更将自动检索到这些经验。"
+```bash
+ls openspec/changes/archive/ | grep <变更名>
+```
+
+如果归档目录不存在，说明归档失败，必须排查原因后重试。
+
+**完成后立即 TodoWrite 标记此步骤 completed。**
+
+### 步骤 4：完成确认
+
+**TodoWrite 全部三个步骤都标记为 completed 后，输出完成消息：**
+
+> "变更 '<变更名>' 已归档到 `openspec/changes/archive/YYYY-MM-DD-<变更名>/`。经验已提取到 lessons.md，下次类似变更将自动检索到这些经验。"
+
+**如果任何步骤未标记 completed，不能输出完成消息，必须继续执行未完成的步骤。**
 
 ## 关键原则
 
