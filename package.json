@@ -26,7 +26,12 @@
     "url": "https://github.com/lininn/openflow.git"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0",
+    "runtime": {
+      "name": "node",
+      "version": "^20.0.0",
+      "onFail": "download"
+    }
   },
   "files": [
     "bin",
