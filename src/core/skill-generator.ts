@@ -49,7 +49,7 @@ export function generateSkills(options: GenerateOptions): void {
     generateSkillFile(skillsDir, 'SKILL.md', depStatus);
 
     // Generate phase files
-    const phases = ['proposal', 'brainstorming', 'spec', 'amend', 'build', 'close'];
+    const phases = ['proposal', 'brainstorming', 'spec', 'amend', 'build', 'verify', 'close'];
     for (const phase of phases) {
       generateSkillFile(skillsDir, `${phase}.md`, depStatus);
     }
@@ -227,7 +227,8 @@ function getInlineTemplate(filename: string, depStatus: DepStatus): string {
       '| spec | openspec/changes/** + test-plan.md + plan-ready.md | 任何代码或实现文件 |',
       '| amend | openspec/changes/** + test-plan.md + plan-ready.md | 代码、测试、实现文件 |',
       '| build | 代码、测试、实现计划状态 | 规格文档 |',
-      '| close | 归档、验证记录、close-issues.md、lessons.md | 代码、测试、实现文件 |',
+      '| verify | 验证记录、verify-issues.md | 代码、测试、规格文档 |',
+'| close | 归档、lessons.md | 代码、测试、其它实现文件 |',
       '',
       '## 子命令',
       '',
@@ -238,7 +239,8 @@ function getInlineTemplate(filename: string, depStatus: DepStatus): string {
       '| /openflow spec | spec | 生成规格 + test-plan.md + plan-ready.md |',
       '| /openflow amend | amend | 受控修订需求，含测试影响分析 |',
       '| /openflow build | build | 测试桩生成 → TDD 执行 |',
-      '| /openflow close | close | 验证覆盖率 → 提取经验 → 归档（Compound） |',
+      '| /openflow verify | verify | 验证闸门：测试+覆盖率+设计一致性 |',
+'| /openflow close | close | 经验沉淀+归档（Compound） |',
       '',
       '## 状态检测',
       '',
@@ -264,7 +266,8 @@ function getInlineTemplate(filename: string, depStatus: DepStatus): string {
       '| spec | 需要活跃变更 | 先用 /openflow proposal |',
       '| amend | 需要活跃变更 | 先完成 /openflow spec |',
       '| build | 需要 test-plan.md + plan-ready.md | 先完成 /openflow spec |',
-      '| close | 所有测试 PASS | 先完成 /openflow build |',
+      '| verify | 所有测试 PASS | 先完成 /openflow build |',
+'| close | verify 已通过 | 先完成 /openflow verify |',
     ].join('\n'),
   };
 

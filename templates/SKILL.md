@@ -1,6 +1,6 @@
 ---
 name: openflow
-description: "OpenSpec + Superpowers workflow orchestrator. Bridges requirements and implementation via test-first traceability: scenarios → test stubs → TDD → passing tests = requirements met. Use /openflow proposal for quick capture, /openflow brainstorming for deep design, /openflow spec to generate specs + test-plan.md + plan-ready.md, /openflow amend to revise requirements with test impact analysis, /openflow build to execute with TDD, /openflow close to verify test coverage and archive."
+description: "OpenSpec + Superpowers workflow orchestrator. Bridges requirements and implementation via test-first traceability: scenarios → test stubs → TDD → passing tests = requirements met. Use /openflow proposal for quick capture, /openflow brainstorming for deep design, /openflow spec to generate specs + test-plan.md + plan-ready.md, /openflow amend to revise requirements with test impact analysis, /openflow build to execute with TDD, /openflow verify as gate before close, /openflow close to compound lessons and archive."
 ---
 
 # openflow - 工作流协调器
@@ -56,9 +56,9 @@ description: "OpenSpec + Superpowers workflow orchestrator. Bridges requirements
 OpenSpec scenarios ──→ test-plan.md (场景→测试映射) ──→ Superpowers TDD 执行
        ↑                                                       │
        │                                                       ↓
-       ├──────────── close: 测试全部 PASS = 需求满足 ────────────┤
+       ├──── verify: 测试闸门 + 覆盖率 + 设计一致性 ─────────────┤
        │                                                       │
-       └──────────── lessons.md ← 提取经验 ← 每个变更完成后 ────┘
+       └──────────── close: lessons.md + archive ───────────────┘
                   (下次 proposal/spec 自动检索)
 ```
 
@@ -104,7 +104,8 @@ OpenSpec scenarios ──→ test-plan.md (场景→测试映射) ──→ Supe
 | spec | `openspec/changes/**`、`test-plan.md`、`plan-ready.md` | 任何代码或实现文件 |
 | amend | `openspec/changes/**`、`test-plan.md`、`plan-ready.md`、`docs/superpowers/plans/*.md` | 代码、测试、其他实现文件 |
 | build | 代码、测试、实现计划状态 | 规格文档（除非另开变更） |
-| close | 归档、验证记录、`close-issues.md`、**`lessons.md`** | 代码、测试、其他实现文件 |
+| verify | 验证记录、`verify-issues.md` | 代码、测试、规格文档 |
+| close | 归档、`lessons.md` | 代码、测试、其它实现文件 |
 
 ## 子命令
 
@@ -115,7 +116,8 @@ OpenSpec scenarios ──→ test-plan.md (场景→测试映射) ──→ Supe
 | `/openflow spec` | spec | OpenSpec 生成规格 + 自动生成 test-plan.md + 翻译 plan-ready.md |
 | `/openflow amend` | amend | 受控修订需求，含测试影响分析 |
 | `/openflow build` | build | 测试桩生成 → TDD 执行，每 task 绑定测试 |
-| `/openflow close` | close | 验证测试覆盖率 → 提取经验(lessons.md) → 归档（Compound 闭环） |
+| `/openflow verify` | verify | 验证闸门：全量测试 + 覆盖率 + 设计一致性 |
+| `/openflow close` | close | 经验沉淀(lessons.md) + 归档（Compound 闭环） |
 
 ## 状态检测
 
@@ -135,7 +137,8 @@ OpenSpec scenarios ──→ test-plan.md (场景→测试映射) ──→ Supe
 - 有 1 个活跃变更但无 test-plan.md → spec 阶段（补生成）
 - 有 test-plan.md 但实现未开始 → build 阶段
 - 实现进行中（部分测试 PASS） → 继续 build 阶段（断点恢复）
-- 实现已完成（所有测试 PASS） → close 阶段
+- 实现已完成（所有测试 PASS） → verify 阶段
+- verify 已通过 → close 阶段
 
 ## 路由
 
@@ -157,4 +160,5 @@ OpenSpec scenarios ──→ test-plan.md (场景→测试映射) ──→ Supe
 | spec | 需要有活跃变更目录或有用户需求 | "请先用 /openflow proposal 或 /openflow brainstorming 描述需求" |
 | amend | 需要有活跃变更目录 | "还没有可修订的活跃变更，请先完成 /openflow spec" |
 | build | 需要存在 test-plan.md 和 plan-ready.md | "请先完成 /openflow spec 生成规格和测试计划" |
-| close | 需要所有测试 PASS | "测试尚未全部通过（test-plan.md 中 N 个测试未完成），请先用 /openflow build 执行" |
+| verify | 需要所有测试 PASS | "测试尚未全部通过，请先用 /openflow build 执行" |
+| close | 需要 verify 已通过 | "请先完成 /openflow verify 验证" |
