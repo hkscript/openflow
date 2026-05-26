@@ -257,7 +257,7 @@ function getInlineTemplate(filename: string, depStatus: DepStatus): string {
       '1. 续接回复 → 保持上一阶段',
       '2. build 中需求变更 → amend',
       '3. 显式子命令 → 按子命令执行',
-      '4. /openflow → 状态检测自动路由',
+      '4. /openflow（无子命令）→ 状态检测 → 展示结果 → 用户选择（不自动路由）',
       '',
       '### 前置条件',
       '',
