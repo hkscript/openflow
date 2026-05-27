@@ -113,17 +113,25 @@ OpenSpec scenarios ──→ test-plan.md (场景→测试映射) ──→ Supe
 | verify | 验证记录、`verify-issues.md` | 代码、测试、规格文档 |
 | close | 归档、`lessons.md` | 代码、测试、其它实现文件 |
 
-## 子命令
+## 子命令路由（必须读取对应参考文件）
 
-| 命令 | 阶段 | 说明 |
-|------|------|------|
-| `/openflow proposal` | proposal | 轻量提问，快速收敛需求 |
-| `/openflow brainstorming` | brainstorming | Superpowers 深度探索 + openflow 格式化写入 proposal.md |
-| `/openflow spec` | spec | OpenSpec 生成规格 + 自动生成 test-plan.md + 翻译 plan-ready.md |
-| `/openflow amend` | amend | 受控修订需求，含测试影响分析 |
-| `/openflow build` | build | 测试桩生成 → TDD 执行，每 task 绑定测试 |
-| `/openflow verify` | verify | 验证闸门：全量测试 + 覆盖率 + 设计一致性 |
-| `/openflow close` | close | 经验沉淀(lessons.md) + 归档（Compound 闭环） |
+**当用户调用 `/openflow <子命令>` 时，必须先读取对应的参考文件，然后按其中的指令执行。**
+
+| 命令 | 参考文件 | 关键提示 |
+|------|----------|----------|
+| `/openflow proposal` | `proposal.md` | 轻量提问，快速收敛需求 |
+| `/openflow brainstorming` | `brainstorming.md` | Superpowers 深度探索 + openflow 格式化写入 |
+| `/openflow spec` | `spec.md` | OpenSpec 生成规格 + test-plan.md + plan-ready.md |
+| `/openflow amend` | `amend.md` | 受控修订需求，含测试影响分析 |
+| `/openflow build` | `build.md` | 测试桩生成 → TDD 执行 |
+| `/openflow verify` | `verify.md` | 验证闸门：全量测试 + 覆盖率 |
+| `/openflow close` | `close.md` | **⚠️ 必须使用 `openspec archive <变更名> --yes`，禁止使用 mv 命令** |
+
+**归档铁律**：`/openflow close` 的归档步骤**必须**使用 `openspec archive` 命令，不能使用 `mv` 手动移动文件。原因：
+- `openspec archive` 会自动验证变更完整性
+- `openspec archive` 会更新主规格文件（`openspec/specs/`）
+- `openspec archive` 会生成正确的归档目录名（`YYYY-MM-DD-<变更名>`）
+- 使用 `mv` 会导致规格不更新、验证缺失、归档格式错误
 
 ## 状态检测
 
@@ -148,12 +156,27 @@ OpenSpec scenarios ──→ test-plan.md (场景→测试映射) ──→ Supe
 
 ## 路由
 
-根据子命令或状态检测结果，读取对应阶段文件并执行：
+根据子命令或状态检测结果，**先读取对应阶段文件**，然后执行：
 
 1. 如果这是上一 openflow 阶段的续接回复，先按"续接与中断恢复"保持阶段
 2. 如果用户在 build 中明确提出需求变更、补充 spec、修改验收条件或重新生成规格，路由到 amend
-3. 如果用户指定了子命令（如 `/openflow spec`），检查前置条件，通过后执行
+3. **如果用户指定了子命令（如 `/openflow close`）：**
+   - **先读取对应的参考文件（见上方"子命令路由"表格）**
+   - 检查前置条件，通过后按参考文件指令执行
 4. **如果用户只输入 `/openflow` 不带子命令：执行状态检测，展示结果，弹出确认让用户选择，不自动进入任何阶段**
+
+**执行子命令的标准流程：**
+```
+用户输入: /openflow close
+      ↓
+1. 读取 close.md（包含完整指令）
+      ↓
+2. 检查前置条件（verify 已通过）
+      ↓
+3. 按 close.md 步骤执行（lessons → tasks.md → openspec archive）
+      ↓
+4. 禁止跳过读取参考文件的步骤
+```
 
 ### 状态检测与确认
 
