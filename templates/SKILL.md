@@ -7,6 +7,17 @@ description: "OpenSpec + Superpowers workflow orchestrator. Bridges requirements
 
 根据用户调用的子命令和项目当前状态，路由到对应阶段。
 
+## 触发方式
+
+**两种触发方式等效**：
+
+| 方式 | 示例 | 说明 |
+|------|------|------|
+| 空格分隔 | `/openflow proposal` | 主 skill 触发，AI 读取主 SKILL.md + 子命令参考文件 |
+| 连字符快捷 | `/openflow-proposal` | 子 skill 触发，AI 读取子 skill 的 SKILL.md（内含 redirect 到主 SKILL.md） |
+
+两种方式都会加载主协调器的完整逻辑（状态检测、前置条件、续接规则），确保协调能力不丢失。
+
 ## 反幻觉铁律
 
 **所有阶段都必须遵守的四条铁律。** 违反了这些，OpenSpec 和 Superpowers 的流程再严谨也没用——因为输入本身就是编的。
