@@ -100,6 +100,15 @@ grep -oP '### Task \d+: .+' openspec/changes/<变更名>/plan-ready.md \
 
 **必须使用 TodoWrite 标记此步骤为 in_progress。这是最关键的一步，绝对不能跳过。**
 
+**归档前检查 proposal.md 格式：**
+
+```bash
+grep -q '^## Why' openspec/changes/<变更名>/proposal.md && echo "✅ Why 存在" || echo "❌ 缺少 ## Why"
+grep -q '^## What Changes' openspec/changes/<变更名>/proposal.md && echo "✅ What Changes 存在" || echo "❌ 缺少 ## What Changes"
+```
+
+如果 `## Why` 或 `## What Changes` 缺失，**先修复 proposal.md 再归档**——根据变更内容补全缺失的节。这是阻塞性问题，不能在缺少必填节的情况下归档。
+
 执行归档命令（用 Bash 工具）：
 
 ```bash

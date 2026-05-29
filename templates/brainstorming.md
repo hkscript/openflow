@@ -55,19 +55,42 @@ Superpowers brainstorming **必须可用**。检查当前工具的本地或全�
 
 ### 4. 写入 OpenSpec proposal.md（openflow 负责，格式化）
 
-按 OpenSpec 目录约定创建变更。`<变更名>` 使用 kebab-case、动词开头：
+按 OpenSpec 目录约定创建变更。`<变更名>` 使用 kebab-case、动词开头（如 `add-user-login`）。
+
+**重要：不要手动加日期前缀** — `openspec archive` 会自动添加 `YYYY-MM-DD-` 前缀，手动加会导致归档名重复（如 `2026-05-29-2026-05-28-<变更名>`）。
 
 ```bash
 mkdir -p openspec/changes/<变更名>/specs
 ```
 
-将设计结果写入 `openspec/changes/<变更名>/proposal.md`，包含：
+将设计结果写入 `openspec/changes/<变更名>/proposal.md`。
 
-- 需求描述（Superpowers 探索出的用户意图）
-- 设计方向（推荐方案及核心决策）
-- 方案取舍记录（为什么选 A 不选 B）
-- 测试策略概述（哪些行为适合单元测试、哪些需要集成测试）
-- 边界和约束
+**proposal.md 格式要求（OpenSpec CLI 校验规则）：**
+
+```markdown
+## Why
+
+[1-2 句话说明问题/机会，至少 50 字符]
+
+## What Changes
+
+- [变更列表，用 bullet 列出]
+- [如有 breaking change，标记 **BREAKING**]
+
+## Impact
+
+- Affected specs: [涉及的 capability 列表]
+- Affected code: [关键文件/系统]
+```
+
+**必须使用英文标题**：`## Why` 和 `## What Changes`。这是 openspec validate 和 openspec archive 的校验要求。
+
+在以上格式基础上，补充 brainstorming 特有的内容：
+- 需求描述（Superpowers 探索出的用户意图）→ 填入 `## Why`
+- 设计方向（推荐方案及核心决策）→ 在 `## Why` 中体现
+- 方案取舍记录（为什么选 A 不选 B）→ 可追加 `## Design Decisions` 节
+- 测试策略概述 → 可追加 `## Test Strategy` 节
+- 边界和约束 → 体现在 `## Impact` 中
 
 ### 5. 提示下一步
 

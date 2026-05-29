@@ -52,13 +52,16 @@ description: Lightweight requirement capture — 3-5 questions to quickly conver
 
 ### 3. 创建 OpenSpec 变更目录
 
-用户确认后，按 OpenSpec 目录约定创建变更。`<变更名>` 使用 kebab-case、动词开头（如 `add-user-login`）：
+用户确认后，按 OpenSpec 目录约定创建变更。`<变更名>` 使用 kebab-case、动词开头（如 `add-user-login`）。
+
+**重要：不要手动加日期前缀** — `openspec archive` 会自动添加 `YYYY-MM-DD-` 前缀，手动加会导致归档名重复（如 `2026-05-29-2026-05-28-<变更名>`）。
 
 ```bash
-mkdir -p openspec/changes/<变更名>/specs
+# 如果目录已存在（如 brainstorming 已创建），跳过 mkdir，直接更新 proposal.md
+ls openspec/changes/<变更名>/proposal.md 2>/dev/null && echo "已存在，追加更新" || mkdir -p openspec/changes/<变更名>/specs
 ```
 
-将确认的需求描述写入 `openspec/changes/<变更名>/proposal.md`。
+如果 proposal.md 已存在（如 brainstorming 阶段创建），在原内容基础上追加/更新，不要覆盖。
 
 **proposal.md 格式要求（OpenSpec CLI 校验规则）：**
 

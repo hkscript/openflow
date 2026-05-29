@@ -120,11 +120,11 @@ description: "Quick start ${phase} phase. Use /openflow-${phase} to ${descriptio
 
 **执行步骤**：
 
-1. **读取主协调器**：\`~/.claude/skills/openflow/SKILL.md\`
+1. **读取主协调器**：\`.claude/skills/openflow/SKILL.md\`（项目本地安装）或 \`~/.claude/skills/openflow/SKILL.md\`（全局安装）
    - 协调器包含状态检测、前置条件检查、续接规则等核心逻辑
    - 必须遵循协调器的路由和阶段写入边界规则
 
-2. **读取阶段参考文件**：\`~/.claude/skills/openflow/${phase}.md\`
+2. **读取阶段参考文件**：\`${phase}.md\`（与主协调器同目录）
    - 包含 ${phase} 阶段的详细指令和流程
 
 3. **按指令执行**：先检查前置条件，再按 ${phase}.md 的流程执行
@@ -276,7 +276,7 @@ function getInlineTemplate(filename: string, depStatus: DepStatus): string {
       '| proposal.md | proposal / brainstorming | 需求描述 |',
       '| design.md | spec | 技术方案 |',
       '| specs/*.md | spec | 结构化规格（requirement + scenario） |',
-      '| tasks.md | spec | OpenSpec 任务清单 |',
+      '| tasks.md | close (自动派生) | 从 plan-ready.md 一行 grep+sed 生成，OpenSpec 格式约定 |',
       '| test-plan.md | spec | 场景→测试映射表（执行期桥梁） |',
       '| plan-ready.md | spec | 实现计划（每 task 绑定测试编号） |',
       '| lessons.md | close | 经验记录（积累期桥梁，Compound 闭环） |',

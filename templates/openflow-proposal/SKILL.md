@@ -7,11 +7,11 @@ description: "Quick start proposal phase. Use /openflow-proposal to create a cha
 
 **执行步骤**：
 
-1. **读取主协调器**：`~/.claude/skills/openflow/SKILL.md`
+1. **读取主协调器**：`.claude/skills/openflow/SKILL.md`（项目本地安装）或 `~/.claude/skills/openflow/SKILL.md`（全局安装）
    - 协调器包含状态检测、前置条件检查、续接规则等核心逻辑
    - 必须遵循协调器的路由和阶段写入边界规则
 
-2. **读取阶段参考文件**：`~/.claude/skills/openflow/proposal.md`
+2. **读取阶段参考文件**：`proposal.md`（与主协调器同目录）
    - 包含 proposal 阶段的详细指令和流程
 
 3. **按指令执行**：先检查前置条件，再按 proposal.md 的流程执行

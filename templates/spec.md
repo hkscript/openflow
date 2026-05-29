@@ -53,7 +53,20 @@ description: Call OpenSpec to generate specs + translate to plan-ready.md, auto-
 
 ### 3. 生成 OpenSpec 规格文件
 
-根据 proposal.md 的内容生成或补齐以下文件：
+**在生成任何文件之前，先校验 proposal.md 格式（阻塞性检查）：**
+
+```bash
+grep -q '^## Why' openspec/changes/<变更名>/proposal.md && echo "✅ Why 存在" || echo "❌ 缺少 ## Why"
+grep -q '^## What Changes' openspec/changes/<变更名>/proposal.md && echo "✅ What Changes 存在" || echo "❌ 缺少 ## What Changes"
+grep -q '^## Impact' openspec/changes/<变更名>/proposal.md && echo "✅ Impact 存在" || echo "⚠️ 建议补充 ## Impact"
+```
+
+如果 `## Why` 或 `## What Changes` 缺失，**必须先修复 proposal.md 再继续**：
+- 中文标题映射：`## 问题描述` / `## 背景` → `## Why`；`## 改动点` / `## 方案` → `## What Changes`
+- 无法从现有内容推断时，根据 design.md 或用户需求补充
+- 修复后重新运行 grep 确认
+
+proposal.md 格式合格后，根据其内容生成或补齐以下文件：
 
 - `openspec/changes/<变更名>/proposal.md` — 已存在，可补充
 - `openspec/changes/<变更名>/design.md` — 技术方案
