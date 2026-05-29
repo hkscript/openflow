@@ -113,12 +113,13 @@ export const initCommand = new Command('init')
       logger.blank();
     }
 
-    logger.info('Available commands:');
-    logger.info('  /openflow proposal      Quick requirement capture');
-    logger.info('  /openflow brainstorming  Deep design exploration');
-    logger.info('  /openflow spec           Generate specs + translate');
-    logger.info('  /openflow amend          Revise requirements before close');
-    logger.info('  /openflow build          Execute implementation');
-    logger.info('  /openflow close          Verify + archive');
+    logger.info('Available commands (两种格式等效):');
+    logger.info('  /openflow proposal      /openflow-proposal');
+    logger.info('  /openflow brainstorming  /openflow-brainstorming');
+    logger.info('  /openflow spec           /openflow-spec');
+    logger.info('  /openflow amend          /openflow-amend');
+    logger.info('  /openflow build          /openflow-build');
+    logger.info('  /openflow verify         /openflow-verify');
+    logger.info('  /openflow close          /openflow-close');
     logger.blank();
   });

@@ -54,6 +54,9 @@ export function generateSkills(options: GenerateOptions): void {
       generateSkillFile(skillsDir, `${phase}.md`, depStatus);
     }
 
+    // Generate sub-skill shortcuts (e.g., openflow-proposal, openflow-spec)
+    generateSubSkillShortcuts(baseDir, toolPaths, phases, depStatus);
+
     logger.success(`${tool} skills generated`);
 
     // Install enforcement hooks (Claude Code only, project-local only)
@@ -61,6 +64,73 @@ export function generateSkills(options: GenerateOptions): void {
       installHooks(baseDir, toolPaths);
     }
   }
+}
+
+function generateSubSkillShortcuts(
+  baseDir: string,
+  toolPaths: typeof TOOL_PATHS['claude'],
+  phases: string[],
+  depStatus: DepStatus
+): void {
+  logger.step('Generating sub-skill shortcuts ...');
+
+  for (const phase of phases) {
+    const subSkillName = `${SKILL_NAME}-${phase}`;
+    const subSkillDir = path.join(baseDir, toolPaths.skillsDir, subSkillName);
+
+    if (!fs.existsSync(subSkillDir)) {
+      fs.mkdirSync(subSkillDir, { recursive: true });
+    }
+
+    // Check if template exists, otherwise generate inline
+    const templatePath = path.join(TEMPLATES_DIR, subSkillName, 'SKILL.md');
+    let content: string;
+
+    if (fileExists(templatePath)) {
+      content = fs.readFileSync(templatePath, 'utf-8');
+    } else {
+      content = getSubSkillTemplate(phase);
+    }
+
+    const targetPath = path.join(subSkillDir, 'SKILL.md');
+    fs.writeFileSync(targetPath, content);
+    logger.step(`  ${subSkillName}/SKILL.md`);
+  }
+}
+
+function getSubSkillTemplate(phase: string): string {
+  const phaseDescriptions: Record<string, string> = {
+    proposal: 'create a change proposal',
+    brainstorming: 'deep design exploration',
+    spec: 'generate specs, test-plan, and plan-ready',
+    amend: 'revise requirements with test impact analysis',
+    build: 'execute TDD implementation',
+    verify: 'run verification gate before close',
+    close: 'archive and extract lessons',
+  };
+
+  const description = phaseDescriptions[phase] || phase;
+
+  return `---
+name: openflow-${phase}
+description: "Quick start ${phase} phase. Use /openflow-${phase} to ${description}, equivalent to /openflow ${phase}."
+---
+
+这是 \`/openflow ${phase}\` 的快捷方式，等效于 \`/openflow ${phase}\`。
+
+**执行步骤**：
+
+1. **读取主协调器**：\`~/.claude/skills/openflow/SKILL.md\`
+   - 协调器包含状态检测、前置条件检查、续接规则等核心逻辑
+   - 必须遵循协调器的路由和阶段写入边界规则
+
+2. **读取阶段参考文件**：\`~/.claude/skills/openflow/${phase}.md\`
+   - 包含 ${phase} 阶段的详细指令和流程
+
+3. **按指令执行**：先检查前置条件，再按 ${phase}.md 的流程执行
+
+**所有协调逻辑（状态检测、前置条件、续接规则）都在主 SKILL.md 中，必须遵循。**
+`;
 }
 
 function installHooks(baseDir: string, toolPaths: typeof TOOL_PATHS['claude']): void {
