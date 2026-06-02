@@ -34,9 +34,10 @@ export function generateSkills(options: GenerateOptions): void {
       continue;
     }
 
-    const skillsDir = path.join(baseDir, toolPaths.skillsDir, SKILL_NAME);
+    const effectiveSkillsDir = global && toolPaths.globalSkillsDir ? toolPaths.globalSkillsDir : toolPaths.skillsDir;
+    const skillsDir = path.join(baseDir, effectiveSkillsDir, SKILL_NAME);
     const displayPath = global
-      ? path.join('~', toolPaths.skillsDir, SKILL_NAME)
+      ? path.join('~', effectiveSkillsDir, SKILL_NAME)
       : path.relative(cwd, skillsDir);
 
     logger.step(`Generating ${tool} skills to ${displayPath}/`);
@@ -46,22 +47,27 @@ export function generateSkills(options: GenerateOptions): void {
     }
 
     // Generate main SKILL.md
-    generateSkillFile(skillsDir, 'SKILL.md', depStatus);
+    generateSkillFile(skillsDir, 'SKILL.md', depStatus, tool, effectiveSkillsDir, Boolean(toolPaths.hooksDir));
 
     // Generate phase files
     const phases = ['proposal', 'brainstorming', 'spec', 'amend', 'build', 'verify', 'close'];
     for (const phase of phases) {
-      generateSkillFile(skillsDir, `${phase}.md`, depStatus);
+      generateSkillFile(skillsDir, `${phase}.md`, depStatus, tool, effectiveSkillsDir, Boolean(toolPaths.hooksDir));
     }
 
     // Generate sub-skill shortcuts (e.g., openflow-proposal, openflow-spec)
-    generateSubSkillShortcuts(baseDir, toolPaths, phases, depStatus);
+    generateSubSkillShortcuts(baseDir, toolPaths, phases, depStatus, tool, effectiveSkillsDir);
 
     logger.success(`${tool} skills generated`);
 
-    // Install enforcement hooks (Claude Code only, project-local only)
-    if (tool === 'claude' && toolPaths.hooksDir && toolPaths.settingsFile) {
+    // Install enforcement hooks (only for tools that support hooks, project-local only)
+    if (toolPaths.hooksDir && toolPaths.settingsFile && !global) {
       installHooks(baseDir, toolPaths);
+    }
+
+    // Install OpenCode plugin (project-local only)
+    if (tool === 'opencode' && !global) {
+      installOpencodePlugin(baseDir);
     }
   }
 }
@@ -70,13 +76,15 @@ function generateSubSkillShortcuts(
   baseDir: string,
   toolPaths: typeof TOOL_PATHS['claude'],
   phases: string[],
-  depStatus: DepStatus
+  depStatus: DepStatus,
+  tool: string,
+  effectiveSkillsDir: string
 ): void {
   logger.step('Generating sub-skill shortcuts ...');
 
   for (const phase of phases) {
     const subSkillName = `${SKILL_NAME}-${phase}`;
-    const subSkillDir = path.join(baseDir, toolPaths.skillsDir, subSkillName);
+    const subSkillDir = path.join(baseDir, effectiveSkillsDir, subSkillName);
 
     if (!fs.existsSync(subSkillDir)) {
       fs.mkdirSync(subSkillDir, { recursive: true });
@@ -92,10 +100,27 @@ function generateSubSkillShortcuts(
       content = getSubSkillTemplate(phase);
     }
 
+    // Replace tool-specific paths in content
+    content = replaceToolPaths(content, effectiveSkillsDir, Boolean(toolPaths.hooksDir));
+
     const targetPath = path.join(subSkillDir, 'SKILL.md');
     fs.writeFileSync(targetPath, content);
     logger.step(`  ${subSkillName}/SKILL.md`);
   }
+}
+
+function replaceToolPaths(content: string, effectiveSkillsDir: string, hasHooks: boolean): string {
+  // Replace local skill path references
+  content = content.replace(/\.claude\/skills\/openflow\//g, `${effectiveSkillsDir}/openflow/`);
+  // Replace global skill path references
+  content = content.replace(/~\/\.claude\/skills\/openflow\//g, `~/${effectiveSkillsDir}/openflow/`);
+  // Replace hook path references
+  content = content.replace(/\.claude\/hooks\/openflow-enforce\.py/g, `${effectiveSkillsDir.replace(/\/skills$/, '')}/hooks/openflow-enforce.py`);
+  // For tools without hooks, remove the hook reference sentence
+  if (!hasHooks) {
+    content = content.replace(/详见 `[^`]*hooks\/openflow-enforce\.py`。\n?/g, '');
+  }
+  return content;
 }
 
 function getSubSkillTemplate(phase: string): string {
@@ -136,8 +161,9 @@ description: "Quick start ${phase} phase. Use /openflow-${phase} to ${descriptio
 function installHooks(baseDir: string, toolPaths: typeof TOOL_PATHS['claude']): void {
   const hooksDir = path.join(baseDir, toolPaths.hooksDir!);
   const settingsFile = path.join(baseDir, toolPaths.settingsFile!);
-  const hookScriptSrc = path.join(HOOKS_DIR, 'enforce.py');
-  const hookScriptDest = path.join(hooksDir, 'openflow-enforce.py');
+  const hookScriptSrc = path.join(HOOKS_DIR, 'enforce.mjs');
+  const hookScriptDest = path.join(hooksDir, 'openflow-enforce.mjs');
+  const oldPyHook = path.join(hooksDir, 'openflow-enforce.py');
 
   if (!fileExists(hookScriptSrc)) {
     logger.warn('Hook script not found, skipping enforcement hooks setup');
@@ -149,16 +175,22 @@ function installHooks(baseDir: string, toolPaths: typeof TOOL_PATHS['claude']): 
     fs.mkdirSync(hooksDir, { recursive: true });
   }
 
+  // Cleanup old Python hook
+  if (fileExists(oldPyHook)) {
+    fs.unlinkSync(oldPyHook);
+    logger.step(`  Removed legacy hook: ${path.relative(baseDir, oldPyHook)}`);
+  }
+
   // Copy hook script
   fs.copyFileSync(hookScriptSrc, hookScriptDest);
   fs.chmodSync(hookScriptDest, 0o755);
   logger.step(`  Hook installed: ${path.relative(baseDir, hookScriptDest)}`);
 
   // Merge hooks into settings.json
-  mergeHooksConfig(settingsFile, hookScriptDest);
+  mergeHooksConfig(settingsFile, hookScriptDest, oldPyHook);
 }
 
-function mergeHooksConfig(settingsFile: string, hookScriptPath: string): void {
+function mergeHooksConfig(settingsFile: string, hookScriptPath: string, oldPyHook: string): void {
   let settings: any = {};
 
   if (fileExists(settingsFile)) {
@@ -176,19 +208,28 @@ function mergeHooksConfig(settingsFile: string, hookScriptPath: string): void {
 
   const preHooks: any[] = settings.hooks.PreToolUse;
 
+  // Remove legacy Python hook entries
+  for (const entry of preHooks) {
+    if (entry.hooks) {
+      entry.hooks = entry.hooks.filter(
+        (h: any) => h.command !== oldPyHook
+      );
+    }
+  }
+
   // Check if openflow hook already registered
   const hookMatchers = ['Edit', 'Write'];
   for (const matcher of hookMatchers) {
     const existing = preHooks.find((h: any) => h.matcher === matcher);
     const newHook = {
       type: 'command',
-      command: hookScriptPath,
+      command: `node ${hookScriptPath}`,
     };
 
     if (existing) {
       // Add hook if not already present
       const exists = existing.hooks?.some(
-        (h: any) => h.command === hookScriptPath
+        (h: any) => h.command === `node ${hookScriptPath}`
       );
       if (!exists) {
         existing.hooks = existing.hooks || [];
@@ -203,10 +244,56 @@ function mergeHooksConfig(settingsFile: string, hookScriptPath: string): void {
   }
 
   fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n');
-  logger.step(`  Hooks registered in ${path.basename(settingsFile)}: Edit, Write → openflow-enforce.py`);
+  logger.step(`  Hooks registered in ${path.basename(settingsFile)}: Edit, Write → node openflow-enforce.mjs`);
 }
 
-function generateSkillFile(skillsDir: string, filename: string, depStatus: DepStatus): void {
+function installOpencodePlugin(baseDir: string): void {
+  const pluginsDir = path.join(baseDir, '.opencode', 'plugins');
+  const opencodeJsonPath = path.join(baseDir, '.opencode', 'opencode.json');
+
+  // Resolve the compiled plugin from dist/
+  const pluginSrc = path.resolve(__dirname, 'enforce', 'opencode.js');
+  const pluginDest = path.join(pluginsDir, 'openflow-enforce.js');
+
+  if (!fileExists(pluginSrc)) {
+    logger.warn('OpenCode plugin not found in dist/, skipping plugin setup — run openflow update after build');
+    return;
+  }
+
+  if (!fs.existsSync(pluginsDir)) {
+    fs.mkdirSync(pluginsDir, { recursive: true });
+  }
+
+  fs.copyFileSync(pluginSrc, pluginDest);
+  logger.step(`  Plugin installed: ${path.relative(baseDir, pluginDest)}`);
+
+  // Register in opencode.json
+  mergeOpencodePluginConfig(opencodeJsonPath);
+}
+
+function mergeOpencodePluginConfig(opencodeJsonPath: string): void {
+  let config: any = {};
+
+  if (fileExists(opencodeJsonPath)) {
+    try {
+      config = JSON.parse(fs.readFileSync(opencodeJsonPath, 'utf-8'));
+    } catch {
+      logger.warn('Could not parse existing opencode.json, creating new');
+    }
+  }
+
+  if (!config.plugin) config.plugin = [];
+
+  const pluginRef = 'file://.opencode/plugins/openflow-enforce.js';
+  if (!config.plugin.includes(pluginRef)) {
+    config.plugin.push(pluginRef);
+  }
+
+  fs.writeFileSync(opencodeJsonPath, JSON.stringify(config, null, 2) + '\n');
+  logger.step(`  Plugin registered in opencode.json: ${pluginRef}`);
+}
+
+function generateSkillFile(skillsDir: string, filename: string, depStatus: DepStatus, tool?: string, effectiveSkillsDir?: string, hasHooks?: boolean): void {
   const templatePath = path.join(TEMPLATES_DIR, filename);
 
   let content: string;
@@ -216,6 +303,11 @@ function generateSkillFile(skillsDir: string, filename: string, depStatus: DepSt
   } else {
     // Fallback: use inline template
     content = getInlineTemplate(filename, depStatus);
+  }
+
+  // Replace tool-specific paths
+  if (effectiveSkillsDir) {
+    content = replaceToolPaths(content, effectiveSkillsDir, Boolean(hasHooks));
   }
 
   // Inject validation hint into spec.md for OpenSpec CLI

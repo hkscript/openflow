@@ -19,7 +19,7 @@ export const DEPS = {
   },
 } as const;
 
-export const TOOL_PATHS: Record<string, { skillsDir: string; commandsDir?: string; hooksDir?: string; settingsFile?: string }> = {
+export const TOOL_PATHS: Record<string, { skillsDir: string; globalSkillsDir?: string; commandsDir?: string; globalCommandsDir?: string; hooksDir?: string; settingsFile?: string }> = {
   claude: {
     skillsDir: '.claude/skills',
     commandsDir: '.claude/commands',
@@ -31,5 +31,11 @@ export const TOOL_PATHS: Record<string, { skillsDir: string; commandsDir?: strin
   },
   cursor: {
     skillsDir: '.cursor/skills',
+  },
+  opencode: {
+    skillsDir: '.opencode/skills',
+    globalSkillsDir: '.config/opencode/skills',
+    commandsDir: '.opencode/commands',
+    globalCommandsDir: '.config/opencode/commands',
   },
 };

@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/hk/github/openflow/.claude/hooks/openflow-enforce.py"
+            "command": "node /home/hk/github/openflow/.claude/hooks/openflow-enforce.mjs"
           }
         ]
       },
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/hk/github/openflow/.claude/hooks/openflow-enforce.py"
+            "command": "node /home/hk/github/openflow/.claude/hooks/openflow-enforce.mjs"
           }
         ]
       }
