@@ -27,15 +27,38 @@ description: Test-first implementation driven by test-plan.md — generate test 
 
 ### 0. 前置检查
 
-**以下依赖必须全部满足，缺一不可：**
+#### 0.1 Superpowers writing-plans（硬性依赖）
 
-1. **Superpowers writing-plans** — skills 目录下必须存在 `writing-plans/SKILL.md`
-2. **测试框架** — 项目必须有可运行的测试框架（pytest/jest/go test/cargo test）
+**必须可用**（skills 目录下存在 `writing-plans/SKILL.md`，或作为 Claude Code 插件 `superpowers:writing-plans` 已安装）。
 
-任一不满足，报错终止：
-> "❌ build 阶段需要 Superpowers writing-plans 和项目测试框架。缺失: [列表]。请先安装缺失的依赖，然后重试。"
+不满足则报错终止：
+> "❌ build 阶段需要 Superpowers writing-plans。请先安装该 skill，然后重试。"
 
-调用 `writing-plans` skill 以 test-plan.md + plan-ready.md 为输入，生成符合本项目技术栈的详细步骤。
+#### 0.2 测试框架（需确认）
+
+检测项目是否有可运行的测试框架（pytest/jest/go test/cargo test 等）。
+
+**如果检测到测试框架** → 继续流程。
+
+**如果未检测到测试框架**，按以下步骤处理：
+
+1. **分析项目技术栈**：根据项目文件（`package.json`、`Cargo.toml`、`go.mod`、`requirements.txt`、`pyproject.toml` 等）判断语言和项目类型
+2. **给出推荐方案**：按技术栈推荐最合适的测试框架，附带理由和安装命令
+3. **询问用户**：
+   > "⚠️ 项目未检测到可运行的测试框架。
+   > 技术栈：[检测到的语言/运行时]
+   > 推荐引入：**[框架名]**
+   > 理由：[一句话说明为什么这个框架适合当前项目]
+   > 安装方式：[命令]
+   > 是否同意引入此测试框架？"
+
+4. **用户同意** → 安装并配置测试框架，确认可运行后继续流程
+5. **用户不同意** → 中断流程：
+   > "⏹️ 用户选择不引入测试框架，build 流程中断。如需恢复，请先配置测试框架后重新执行 `/openflow build`。"
+
+#### 0.3 生成实现计划
+
+前置检查全部通过后，调用 `writing-plans` skill 以 test-plan.md + plan-ready.md 为输入，生成符合本项目技术栈的详细步骤。
 
 ### 1. 检测状态
 
