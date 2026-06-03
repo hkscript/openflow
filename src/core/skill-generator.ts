@@ -60,14 +60,14 @@ export function generateSkills(options: GenerateOptions): void {
 
     logger.success(`${tool} skills generated`);
 
-    // Install enforcement hooks (only for tools that support hooks, project-local only)
-    if (toolPaths.hooksDir && toolPaths.settingsFile && !global) {
+    // Install enforcement hooks
+    if (toolPaths.hooksDir && toolPaths.settingsFile) {
       installHooks(baseDir, toolPaths);
     }
 
-    // Install OpenCode plugin (project-local only)
-    if (tool === 'opencode' && !global) {
-      installOpencodePlugin(baseDir);
+    // Install OpenCode plugin
+    if (tool === 'opencode') {
+      installOpencodePlugin(baseDir, global, toolPaths);
     }
   }
 }
@@ -247,9 +247,12 @@ function mergeHooksConfig(settingsFile: string, hookScriptPath: string, oldPyHoo
   logger.step(`  Hooks registered in ${path.basename(settingsFile)}: Edit, Write → node openflow-enforce.mjs`);
 }
 
-function installOpencodePlugin(baseDir: string): void {
-  const pluginsDir = path.join(baseDir, '.opencode', 'plugins');
-  const opencodeJsonPath = path.join(baseDir, '.opencode', 'opencode.json');
+function installOpencodePlugin(baseDir: string, global: boolean, toolPaths: typeof TOOL_PATHS['opencode']): void {
+  const configBase = global && toolPaths.globalSkillsDir
+    ? path.dirname(toolPaths.globalSkillsDir)  // ".config/opencode"
+    : path.dirname(toolPaths.skillsDir);        // ".opencode"
+  const pluginsDir = path.join(baseDir, configBase, 'plugins');
+  const opencodeJsonPath = path.join(baseDir, configBase, 'opencode.json');
 
   // Resolve the compiled plugin from dist/
   const pluginSrc = path.resolve(__dirname, 'enforce', 'opencode.js');
