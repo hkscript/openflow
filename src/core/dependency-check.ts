@@ -31,7 +31,15 @@ export function checkDependencies(options: CheckDependencyOptions = {}): DepStat
   // Check Superpowers in the selected tools' local and global skill dirs.
   const superpowersSkillPaths = getSuperpowersSkillPaths(cwd, home, tools);
   const superpowersSkillPath = superpowersSkillPaths.find((candidate) => fs.existsSync(candidate));
-  const superpowersInstalled = Boolean(superpowersSkillPath);
+
+  // Also accept the Claude Code plugin form (superpowers@* in installed_plugins.json).
+  const pluginSkillPath = getSuperpowersPluginSkillPath(home);
+  if (pluginSkillPath && !superpowersSkillPaths.includes(pluginSkillPath)) {
+    superpowersSkillPaths.push(pluginSkillPath);
+  }
+
+  const superpowersInstalled = Boolean(superpowersSkillPath || pluginSkillPath);
+  const superpowersPath = superpowersSkillPath ?? pluginSkillPath;
 
   return {
     openspec: {
@@ -41,7 +49,7 @@ export function checkDependencies(options: CheckDependencyOptions = {}): DepStat
     superpowers: {
       installed: superpowersInstalled,
       hint: superpowersInstalled ? undefined : DEPS.superpowers.installHint,
-      path: superpowersSkillPath,
+      path: superpowersPath,
       checkedPaths: superpowersSkillPaths,
     },
   };
@@ -59,6 +67,51 @@ function getSuperpowersSkillPaths(cwd: string, home: string, tools: string[]): s
   }
 
   return [...candidates];
+}
+
+/**
+ * Detect writing-plans installed as part of the Claude Code superpowers plugin.
+ *
+ * Reads ~/.claude/plugins/installed_plugins.json, matches any key starting with
+ * "superpowers@", takes the first entry's installPath, and returns
+ * <installPath>/skills/writing-plans/SKILL.md if it exists on disk.
+ *
+ * This lets build/status/init correctly recognize writing-plans when superpowers
+ * is installed as a plugin rather than as a loose skill file.
+ */
+function getSuperpowersPluginSkillPath(home: string): string | undefined {
+  const pluginsFile = path.join(home, DEPS.superpowers.installedPluginsFile);
+  let raw: string;
+  try {
+    raw = fs.readFileSync(pluginsFile, 'utf-8');
+  } catch {
+    return undefined;
+  }
+
+  let data: { plugins?: Record<string, unknown> };
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+
+  const plugins = data.plugins;
+  if (!plugins || typeof plugins !== 'object') return undefined;
+
+  const prefix = DEPS.superpowers.pluginNamePrefix;
+  for (const [key, value] of Object.entries(plugins as Record<string, unknown>)) {
+    if (!key.startsWith(prefix)) continue;
+    // Value is normally an array of install records; tolerate a single object too.
+    const entries = Array.isArray(value) ? value : [value];
+    for (const entry of entries) {
+      const installPath = (entry as { installPath?: string } | null | undefined)?.installPath;
+      if (!installPath) continue;
+      const skillPath = path.join(installPath, DEPS.superpowers.pluginSkillPath);
+      if (fs.existsSync(skillPath)) return skillPath;
+    }
+  }
+
+  return undefined;
 }
 
 export function tryAutoInstall(pkg: string): boolean {

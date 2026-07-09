@@ -27,11 +27,19 @@ description: Test-first implementation driven by test-plan.md — generate test 
 
 ### 0. 前置检查
 
+#### 0.0 创建 build 阶段标记
+
+进入 build 阶段时，立即创建标记文件 `.openflow/building`（内容写当前变更名即可）。若标记已存在（断点恢复），跳过创建。
+
+此标记启用 enforcement hook 的 writing-plans 闸门（见 0.1）：标记存在期间，若 writing-plans 不可用，实现类代码的 Edit/Write 会被阻断。标记在步骤 7 完成、close 或重新 build 时删除。
+
 #### 0.1 Superpowers writing-plans（硬性依赖）
 
 **必须可用**（skills 目录下存在 `writing-plans/SKILL.md`，或作为 Claude Code 插件 `superpowers:writing-plans` 已安装）。
 
-不满足则报错终止：
+该依赖由 enforcement hook 强制：`.openflow/building` 标记存在时，若 writing-plans 未检测到（已查 skills 目录和 superpowers 插件），实现类代码编辑会被阻断。
+
+不满足则**删除 `.openflow/building` 标记后报错终止**（避免遗留标记阻断后续操作）：
 > "❌ build 阶段需要 Superpowers writing-plans。请先安装该 skill，然后重试。"
 
 #### 0.2 测试框架（需确认）
@@ -188,7 +196,7 @@ Step 8: 更新 test-plan.md 中对应测试行的状态为 ✅
 2. **全量测试回归通过**：所有新老测试 PASS，无回归
 3. **所有 task checkbox 已勾选**：plan-ready.md 中无未勾选的 task
 
-全部满足后输出：
+全部满足后，**删除 `.openflow/building` 标记文件**（退出 build 阶段），然后输出：
 > "所有实现任务已完成，测试全部通过（N 个测试覆盖 M 个场景），[前端/后端/全栈] 均已修改完毕。
 > 接下来用 `/openflow close` 验证测试覆盖度并归档。"
 

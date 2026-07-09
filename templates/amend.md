@@ -27,6 +27,8 @@ description: Revise requirements during build — delta to OpenSpec docs, impact
 
 ## 流程
 
+> 注：amend **不删除** build 阶段标记 `.openflow/building`——amend 完成后 build 会续接（从 checkbox 状态恢复），标记需保留以维持 writing-plans 闸门生效。amend 编辑的都是 `openspec/` 文档，本就不受该闸门阻断。
+
 ### 1. 确认当前变更
 
 检查 `openspec/changes/` 下的 active change。如有多个列出让用户选择。

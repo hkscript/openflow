@@ -27,15 +27,64 @@ description: Test-first implementation driven by test-plan.md — generate test 
 
 ### 0. 前置检查
 
-**以下依赖必须全部满足，缺一不可：**
+#### 0.0 创建 build 阶段标记
 
-1. **Superpowers writing-plans** — skills 目录下必须存在 `writing-plans/SKILL.md`
-2. **测试框架** — 项目必须有可运行的测试框架（pytest/jest/go test/cargo test）
+进入 build 阶段时，立即创建标记文件 `.openflow/building`（内容写当前变更名即可）。若标记已存在（断点恢复），跳过创建。
 
-任一不满足，报错终止：
-> "❌ build 阶段需要 Superpowers writing-plans 和项目测试框架。缺失: [列表]。请先安装缺失的依赖，然后重试。"
+此标记启用 enforcement hook 的 writing-plans 闸门（见 0.1）：标记存在期间，若 writing-plans 不可用，实现类代码的 Edit/Write 会被阻断。标记在步骤 7 完成、close 或重新 build 时删除。
 
-调用 `writing-plans` skill 以 test-plan.md + plan-ready.md 为输入，生成符合本项目技术栈的详细步骤。
+#### 0.1 Superpowers writing-plans（硬性依赖）
+
+**必须可用**（skills 目录下存在 `writing-plans/SKILL.md`，或作为 Claude Code 插件 `superpowers:writing-plans` 已安装）。
+
+该依赖由 enforcement hook 强制：`.openflow/building` 标记存在时，若 writing-plans 未检测到（已查 skills 目录和 superpowers 插件），实现类代码编辑会被阻断。
+
+不满足则**删除 `.openflow/building` 标记后报错终止**（避免遗留标记阻断后续操作）：
+> "❌ build 阶段需要 Superpowers writing-plans。请先安装该 skill，然后重试。"
+
+#### 0.2 测试框架（需确认）
+
+检测项目是否有可运行的测试框架（pytest/jest/go test/cargo test 等）。
+
+**如果检测到测试框架** → 继续流程。
+
+**如果未检测到测试框架**，按以下步骤处理：
+
+1. **分析项目技术栈**：根据项目文件（`package.json`、`Cargo.toml`、`go.mod`、`requirements.txt`、`pyproject.toml` 等）判断语言和项目类型
+2. **给出推荐方案**：按技术栈推荐最合适的测试框架，附带理由和安装命令
+3. **询问用户**：
+   > "⚠️ 项目未检测到可运行的测试框架。
+   > 技术栈：[检测到的语言/运行时]
+   > 推荐引入：**[框架名]**
+   > 理由：[一句话说明为什么这个框架适合当前项目]
+   > 安装方式：[命令]
+   > 是否同意引入此测试框架？"
+
+4. **用户同意** → 安装并配置测试框架，确认可运行后继续流程
+5. **用户不同意** → 中断流程：
+   > "⏹️ 用户选择不引入测试框架，build 流程中断。如需恢复，请先配置测试框架后重新执行 `/openflow build`。"
+
+#### 0.3 全栈覆盖检查
+
+**同一工作区内，变更涉及的前后端代码必须全部修改完成。**
+
+读取 plan-ready.md 中的"改动文件"列表，检查是否同时包含前端和后端代码：
+
+| 信号 | 示例 |
+|------|------|
+| 前端代码 | `src/pages/`、`components/`、`*.tsx`、`*.vue`、`*.jsx`、`store/`、`api/`（前端调用层） |
+| 后端代码 | `src/controller/`、`src/service/`、`*.go`（后端）、`routes/`、`models/` |
+
+**如果变更跨前后端**：
+1. 实现计划必须包含前端和后端的所有 task
+2. 不能以"XX 是独立项目"为由跳过任一侧
+3. 如果某一侧的代码在另一个仓库，明确告知用户需要切换到那个仓库操作，但**本工作区内的代码必须先改完**
+
+**如果用户问"前端改了吗"而前端在本工作区但还没改**：直接回答"还没改，现在开始改"，而不是说"前端在别的项目里"——只要代码在同一工作区可见，就必须改。
+
+#### 0.4 生成实现计划
+
+前置检查全部通过后，调用 `writing-plans` skill 以 test-plan.md + plan-ready.md 为输入，生成符合本项目技术栈的详细步骤。
 
 ### 1. 检测状态
 
@@ -53,8 +102,9 @@ description: Test-first implementation driven by test-plan.md — generate test 
 **在生成任何测试文件之前，先理解你在改什么。**
 
 1. **读 plan-ready.md 中列出的所有"改动文件"**：逐个打开将修改的文件，理解现有实现
-2. **读现有测试文件**：如果目标文件已有对应测试（如 `src/auth/login.py` → `tests/auth/test_login.py`），先读懂现有测试的模式——mock 方式、断言风格、fixture 约定
-3. **读一个类似的完整测试用例**：如果项目已有类似功能的测试，挑一个完整的当模板——测试桩的风格必须和它一致
+2. **识别全栈范围**：明确标注哪些文件是前端、哪些是后端。如果变更同时涉及前后端，记录下来——后续实现计划必须覆盖所有侧
+3. **读现有测试文件**：如果目标文件已有对应测试（如 `src/auth/login.py` → `tests/auth/test_login.py`），先读懂现有测试的模式——mock 方式、断言风格、fixture 约定
+4. **读一个类似的完整测试用例**：如果项目已有类似功能的测试，挑一个完整的当模板——测试桩的风格必须和它一致
 
 **未读不用检查（必做，进入步骤 3 前）：**
 - plan-ready.md 中每个 task 的 `[Assumption]` 路径必须逐个 grep/Read 确认
@@ -138,15 +188,17 @@ Step 8: 更新 test-plan.md 中对应测试行的状态为 ✅
 
 如发现回归，优先修复后再继续。
 
-### 7. 完成提示
+### 7. 完成检查与提示
 
-**在提示下一步之前，先执行以下两步（不可跳过 close 前验证）：**
+**在宣布完成之前，必须逐项确认：**
 
-1. **自动测试闸门**：运行全量测试套件，贴出实际输出。所有 PASS 才往下一步，有 FAIL 就回到对应 task 修复。
-2. **人工验证**：如果项目有可运行的 app，启动它实际验证核心场景。机器测不到的东西（UI 交互、体验、边界直觉）这一步来覆盖。
+1. **全栈覆盖**：回顾 0.3 的全栈范围标记——前端和后端 task 是否全部 `[x]`？如果有任一侧未完成，不能宣布完成，继续执行剩余 task
+2. **全量测试回归通过**：所有新老测试 PASS，无回归
+3. **所有 task checkbox 已勾选**：plan-ready.md 中无未勾选的 task
 
-以上两步都通过后，提示用户：
-> "自动测试全绿（N 个测试覆盖 M 个场景），人工验证通过。接下来用 `/openflow verify` 做最终验证闸门。"
+全部满足后，**删除 `.openflow/building` 标记文件**（退出 build 阶段），然后输出：
+> "所有实现任务已完成，测试全部通过（N 个测试覆盖 M 个场景），[前端/后端/全栈] 均已修改完毕。
+> 接下来用 `/openflow close` 验证测试覆盖度并归档。"
 
 ## 关键原则
 
@@ -156,3 +208,4 @@ Step 8: 更新 test-plan.md 中对应测试行的状态为 ✅
 - test-plan.md 是 build 阶段的执行清单——完成的测试从 `TODO` → `PASS`
 - 断点恢复：从 test-plan.md 中第一个非 PASS 的测试对应 task 继续
 - 如果在 task 执行过程中发现测试计划遗漏（某些边界情况在 test-plan.md 中没有对应测试），暂停并切到 amend
+- **同一工作区前后端必须全部改完** — 如果变更涉及前端和后端，两边代码都在当前工作区，则两边都必须修改完成。不能说"XX 是独立项目还没改"就跳过——代码在工作区可见就必须改。

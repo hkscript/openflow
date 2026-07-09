@@ -114,6 +114,7 @@ grep -q '^## What Changes' openspec/changes/<变更名>/proposal.md && echo "✅
 ```bash
 openspec validate <变更名> --strict
 openspec archive <变更名> --yes
+rm -f .openflow/building   # 清理 build 阶段标记（build 未正常退出时可能残留）
 ```
 
 **验证归档成功：**

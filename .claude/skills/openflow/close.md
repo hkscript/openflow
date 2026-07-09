@@ -177,6 +177,7 @@ openspec validate <变更名> --strict
 
 ```bash
 openspec archive <变更名> --yes
+rm -f .openflow/building   # 清理 build 阶段标记（build 未正常退出时可能残留）
 ```
 
 ### 9. 完成提示

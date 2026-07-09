@@ -8,6 +8,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 
 // ---- helpers ----
 
@@ -92,6 +93,61 @@ function checkTasksSync(filePath, content, cwd) {
   };
 }
 
+// ---- firewall 5: Writing-Plans Gate (block) ----
+//
+// build 阶段标记 .openflow/building 存在时，若 writing-plans 不可用（skill 文件和
+// superpowers 插件都查不到），阻断实现类文件编辑。防止 AI 在 writing-plans 缺失时
+// 自行合理化、跳过 build.md 步骤 0.1 的"报错终止"而继续写代码。
+
+function isWritingPlansAvailable(cwd, home) {
+  if (process.env.OPENFLOW_FORCE_WP_MISSING === '1') return false;
+  const skillCandidates = [
+    path.join(cwd, '.claude/skills/writing-plans/SKILL.md'),
+    path.join(home, '.claude/skills/writing-plans/SKILL.md'),
+    path.join(cwd, '.opencode/skills/writing-plans/SKILL.md'),
+    path.join(home, '.config/opencode/skills/writing-plans/SKILL.md'),
+  ];
+  for (const c of skillCandidates) {
+    if (fs.existsSync(c)) return true;
+  }
+  // Claude Code 插件形式：superpowers@* in installed_plugins.json
+  const pluginsFile = path.join(home, '.claude/plugins/installed_plugins.json');
+  try {
+    const data = JSON.parse(fs.readFileSync(pluginsFile, 'utf-8'));
+    const plugins = data && data.plugins;
+    if (plugins && typeof plugins === 'object') {
+      for (const [key, value] of Object.entries(plugins)) {
+        if (!key.startsWith('superpowers@')) continue;
+        const entries = Array.isArray(value) ? value : [value];
+        for (const entry of entries) {
+          const installPath = entry && entry.installPath;
+          if (installPath && fs.existsSync(path.join(installPath, 'skills/writing-plans/SKILL.md'))) {
+            return true;
+          }
+        }
+      }
+    }
+  } catch { /* ignore */ }
+  return false;
+}
+
+function checkWritingPlansGate(filePath, cwd) {
+  if (process.env.OPENFLOW_NO_BUILD_GATE === '1') return null;
+  const marker = path.join(cwd, '.openflow', 'building');
+  if (!fs.existsSync(marker)) return null;
+  // openspec 规格文档归 phase-boundary 管；计划产物和标记自身管理不拦
+  if (filePath.includes('openspec/')) return null;
+  if (filePath.includes('docs/superpowers/')) return null;
+  if (filePath.includes('.openflow/')) return null;
+  if (isWritingPlansAvailable(cwd, os.homedir())) return null;
+  return {
+    id: 'writing-plans-gate',
+    level: 'block',
+    message: `build 阶段需要 writing-plans，但未检测到（已查 skills 目录和 superpowers 插件）`,
+    detail: '请先安装 Superpowers writing-plans（Claude Code: /plugin install superpowers@claude-plugins-official）后重试，或退出 build 阶段（删除 .openflow/building）。',
+  };
+}
+
 // ---- main ----
 
 function main() {
@@ -114,6 +170,7 @@ function main() {
       () => checkCertaintyTags(filePath, content),
       () => checkPhaseBoundary(filePath, cwd),
       () => checkTasksSync(filePath, content, cwd),
+      () => checkWritingPlansGate(filePath, cwd),
     ];
     let blocked = false;
 
