@@ -100,9 +100,13 @@ grep -oP '### Task \d+: .+' openspec/changes/<变更名>/plan-ready.md \
 
 **必须使用 TodoWrite 标记此步骤为 in_progress。这是最关键的一步，绝对不能跳过。**
 
-**归档前检查 proposal.md 格式：**
+**归档前检查 proposal.md 格式和前置条件：**
 
 ```bash
+# 推荐：脚本校验（同时检查 proposal 格式 + openspec validate + building 标记）
+node .claude/hooks/openflow-gate.mjs check-close-ready <变更名>
+
+# 或手动 grep
 grep -q '^## Why' openspec/changes/<变更名>/proposal.md && echo "✅ Why 存在" || echo "❌ 缺少 ## Why"
 grep -q '^## What Changes' openspec/changes/<变更名>/proposal.md && echo "✅ What Changes 存在" || echo "❌ 缺少 ## What Changes"
 ```

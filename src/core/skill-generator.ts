@@ -186,6 +186,22 @@ function installHooks(baseDir: string, toolPaths: typeof TOOL_PATHS['claude']): 
   fs.chmodSync(hookScriptDest, 0o755);
   logger.step(`  Hook installed: ${path.relative(baseDir, hookScriptDest)}`);
 
+  // Copy state detection and gate scripts
+  const detectSrc = path.join(HOOKS_DIR, 'detect.mjs');
+  const gateSrc = path.join(HOOKS_DIR, 'gate.mjs');
+  if (fileExists(detectSrc)) {
+    const detectDest = path.join(hooksDir, 'openflow-detect.mjs');
+    fs.copyFileSync(detectSrc, detectDest);
+    fs.chmodSync(detectDest, 0o755);
+    logger.step(`  Detect script: ${path.relative(baseDir, detectDest)}`);
+  }
+  if (fileExists(gateSrc)) {
+    const gateDest = path.join(hooksDir, 'openflow-gate.mjs');
+    fs.copyFileSync(gateSrc, gateDest);
+    fs.chmodSync(gateDest, 0o755);
+    logger.step(`  Gate script: ${path.relative(baseDir, gateDest)}`);
+  }
+
   // Merge hooks into settings.json
   mergeHooksConfig(settingsFile, hookScriptDest, oldPyHook);
 }

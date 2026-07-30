@@ -20,7 +20,7 @@ description: "OpenSpec + Superpowers workflow orchestrator. Bridges requirements
 
 ## 反幻觉铁律
 
-**所有阶段都必须遵守的四条铁律。** 违反了这些，OpenSpec 和 Superpowers 的流程再严谨也没用——因为输入本身就是编的。
+**所有阶段都必须遵守的五条铁律。** 违反了这些，OpenSpec 和 Superpowers 的流程再严谨也没用——因为输入本身就是编的。
 
 ### 铁律 1：未读不用（No-Read-No-Use）
 
@@ -58,6 +58,20 @@ description: "OpenSpec + Superpowers workflow orchestrator. Bridges requirements
 - 第 3 次尝试**必须换一种完全不同的方法**
 - 不能只是微调参数或换措辞重试
 - 先退一步质疑自己的假设：**"我对这个问题的理解有没有可能从根上就错了？"**
+
+### 铁律 5：否定即暂停（Negative-Means-Pause）
+
+当某个检查返回"不存在/未找到"但其他 ≥2 个独立信号返回"存在/已完成"时：
+- **禁止**基于单点否定直接跳到结论
+- **必须**列出所有矛盾的信号源（形成信号矩阵）
+- **必须**暂停并用 AskUserQuestion 让用户确认实际状态
+
+"找不到文件"不能直接等于"代码没写"——可能是跨仓库引用、路径写错、或文件在非标准位置。
+
+典型误判场景：
+- test-plan.md 全 PASS 但某测试文件磁盘上找不到 → 可能是跨仓库路径
+- git log 有实现 commit 但 plan 文件不存在 → 可能是手动实现（没走 superpowers）
+- plan-ready.md 列出的文件在当前工作区找不到 → 路径写错或跨仓库
 
 ## 核心设计理念
 
@@ -146,17 +160,36 @@ OpenSpec scenarios ──→ test-plan.md (场景→测试映射) ──→ Supe
 
 ## 状态检测
 
-当用户调用 `/openflow` 不带子命令，或调用某个子命令需要确认前置条件时，执行以下状态检测：
+当用户调用 `/openflow` 不带子命令，或调用某个子命令需要确认前置条件时，**先运行状态检测脚本**：
 
-| 检查项 | 怎么查 | 结果 |
-|--------|--------|------|
-| 有活跃变更？ | `openspec/changes/` 下是否有非 archive 子目录 | 有→继续 |
-| 有 test-plan.md？ | 变更目录下是否有 `test-plan.md` | 有→看测试状态 |
-| 有 plan-ready.md？ | 变更目录下是否有 `plan-ready.md` | 有→看实现状态 |
-| 实现已开始？ | `docs/superpowers/plans/` 下是否有计划文件 | 有→看是否完成 |
-| 测试全部通过？ | test-plan.md 中所有测试是否标记 PASS | 是→close 阶段 |
+```bash
+node .claude/hooks/openflow-detect.mjs
+```
+
+脚本收集以下信号并输出 JSON：
+
+| 信号 | 来源 | 可靠性 | 说明 |
+|------|------|--------|------|
+| active_changes | `openspec/changes/` 非 archive 目录 | high | 活跃变更列表 |
+| test_plan / test_plan_stats | 变更目录下 test-plan.md | high | PASS/TODO/FAIL 计数 |
+| plan_ready / plan_ready_tasks | 变更目录下 plan-ready.md | high | [x]/[ ] 计数 |
+| git_commits | `git log --oneline -30` | high | ground truth，不可伪造 |
+| superpowers_plan | `docs/superpowers/plans/` | medium | 可能残留旧文件 |
+| file_resolvability | plan-ready 中改动文件可找到 | low | 多仓库或路径写错会误判 |
+| building_marker | `.openflow/building` | high | build 阶段标记 |
+| verify_issues | verify-issues.md | medium | verify 阶段产物 |
+| lessons | lessons.md | low | close 阶段产物 |
+
+**读取输出的 JSON。如果 `contradictions` 非空，说明不同信号源给出相反结论——禁止基于单点否定跳到结论，必须展示信号矩阵并用 AskUserQuestion 让用户确认。如果无矛盾，按 `suggested_phase` 路由。**
+
+交叉验证规则（写死在脚本中，不依赖 AI 推理）：
+
+1. 若 reliability=low 的否定信号 + reliability≥medium 的 ≥2 个肯定信号 → contradiction
+2. 若 test-plan 全 PASS + git 有 commit + plan-ready 全 [x]，仅 file_resolvability 有缺失 → 建议 verify，不判"未开始"
+3. 若 test-plan 全 PASS + plan-ready 全 [x] 但 `.openflow/building` 仍存在 → building 标记残留，提醒清理
 
 判定结果：
+- **信号矛盾**（contradictions 非空）→ 展示信号矩阵 + AskUserQuestion 确认，不自动路由
 - 无活跃变更 → proposal 阶段
 - **有 2+ 个活跃变更 → 列出所有变更让用户选择，然后根据选中变更的状态继续路由**
 - 有 1 个活跃变更但无 test-plan.md → spec 阶段（补生成）

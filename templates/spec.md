@@ -56,10 +56,16 @@ description: Call OpenSpec to generate specs + translate to plan-ready.md, auto-
 **在生成任何文件之前，先校验 proposal.md 格式（阻塞性检查）：**
 
 ```bash
+# 方式 1：脚本校验（推荐）
+node .claude/hooks/openflow-gate.mjs check-proposal <变更名>
+
+# 方式 2：手动 grep（脚本不可用时）
 grep -q '^## Why' openspec/changes/<变更名>/proposal.md && echo "✅ Why 存在" || echo "❌ 缺少 ## Why"
 grep -q '^## What Changes' openspec/changes/<变更名>/proposal.md && echo "✅ What Changes 存在" || echo "❌ 缺少 ## What Changes"
 grep -q '^## Impact' openspec/changes/<变更名>/proposal.md && echo "✅ Impact 存在" || echo "⚠️ 建议补充 ## Impact"
 ```
+
+脚本输出 JSON，`pass` 字段直接指示是否通过。
 
 如果 `## Why` 或 `## What Changes` 缺失，**必须先修复 proposal.md 再继续**：
 - 中文标题映射：`## 问题描述` / `## 背景` → `## Why`；`## 改动点` / `## 方案` → `## What Changes`
@@ -296,6 +302,8 @@ grep -rn "methodName" src/ --include="*.java" -B 5
 | design 与 specs 一致 | 对比 design.md 的技术决策与 specs 的 requirement | 不能矛盾 |
 | 测试类型匹配 | 检查 test-plan.md 的"类型"列与测试文件位置 | 单元测试不在集成目录 |
 | 任务顺序合理 | 检查 plan-ready.md 的 task 依赖关系 | 被依赖方排在前面 |
+
+**辅助脚本**：`node .claude/hooks/openflow-gate.mjs check-cross-ref <变更名>` 可自动检测 test-plan ↔ plan-ready 交叉引用问题（orphan_task / uncovered_test）。
 
 #### 7.5 依赖注入验证
 
