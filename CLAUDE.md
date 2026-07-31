@@ -38,8 +38,13 @@ bin/openflow.js    CLI 入口
 
 ## 开发约定
 
-- **改动模板时**：同步更新 `templates/`（源）+ `.claude/skills/openflow/`（本项目开发用）+ `~/.claude/skills/openflow/`（全局测试用）
+- **改动模板/hook 后，测试方式**：
+  ```bash
+  npm run build && cd /tmp/test-openflow && mkdir -p openspec \
+    && openflow init --tools claude \
+    && node .claude/hooks/openflow-detect.mjs        # 测试状态检测
+  ```
+  在临时目录验证，不在本项目内吃狗粮（`.claude/` 已 gitignore）。
 - **新增 hook 脚本时**：放 `hooks/` 目录，在 `src/core/skill-generator.ts` 的 `installHooks()` 中注册拷贝逻辑
 - **脚本零依赖**：所有 `.mjs` 脚本必须是纯 Node 20+，不依赖 npm 包
 - **TypeScript 构建**：`npm run build`（tsc），输出到 `dist/`
-- **本项目的 `.claude/` 是 gitignored 的**：它是 `openflow init` 的安装产物，开发时手动从 templates/hooks 同步
