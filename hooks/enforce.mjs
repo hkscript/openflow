@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * openflow enforcement hooks for Claude Code — 四道防火墙
+ * openflow enforcement hooks for Claude Code — 六道防火墙
  *
  * standalone .mjs, no dependencies. Called by Claude Code PreToolUse hook.
  * Reads tool-call JSON from stdin, prints warnings to stdout, exits 1 if blocked.
@@ -148,6 +148,84 @@ function checkWritingPlansGate(filePath, cwd) {
   };
 }
 
+// ---- firewall 6: TDD Stub Check (block) ----
+//
+// build 阶段标记 .openflow/building 存在时，若 AI 正在编辑实现文件（非测试文件），
+// 检查 test-plan.md 中列出的测试文件是否仍残留 TODO 桩。如有则阻断——必须先补全
+// 测试再写实现代码（TDD 铁律：Step 1 补全测试 → Step 2 确认 FAIL → Step 3 写实现）。
+
+function checkTddStubs(filePath, cwd) {
+  if (process.env.OPENFLOW_NO_BUILD_GATE === '1') return null;
+  const marker = path.join(cwd, '.openflow', 'building');
+  if (!fs.existsSync(marker)) return null;
+
+  // Only check implementation files, not test files themselves
+  const normalized = filePath.replace(/\\/g, '/');
+  if (normalized.includes('/test/') || normalized.includes('/tests/') ||
+      normalized.includes('/__tests__/') || normalized.includes('/spec/') ||
+      normalized.endsWith('Test.java') || normalized.endsWith('Test.kt') ||
+      normalized.endsWith('test.js') || normalized.endsWith('test.ts') ||
+      normalized.endsWith('_test.py') || normalized.endsWith('_test.go') ||
+      normalized.endsWith('_test.rs') || normalized.endsWith('.test.js') ||
+      normalized.endsWith('.test.ts') || normalized.endsWith('.test.tsx') ||
+      normalized.endsWith('.spec.js') || normalized.endsWith('.spec.ts')) {
+    return null;
+  }
+
+  // Skip non-code files
+  if (!normalized.includes('src/')) return null;
+
+  // Find the active change
+  const changesDir = path.join(cwd, 'openspec', 'changes');
+  let changeDir = null;
+  try {
+    const entries = fs.readdirSync(changesDir, { withFileTypes: true });
+    const active = entries.filter(e => e.isDirectory() && e.name !== 'archive');
+    if (active.length === 1) {
+      changeDir = path.join(changesDir, active[0].name);
+    }
+  } catch { return null; }
+  if (!changeDir) return null;
+
+  // Read test-plan.md to find test files
+  const tpPath = path.join(changeDir, 'test-plan.md');
+  const tpContent = safeRead(tpPath);
+  if (!tpContent) return null;
+
+  // Extract test file paths from the mapping table
+  const testFiles = new Set();
+  const fileRe = /`([^`]+\.[a-z]{2,6}(?:::[^`]+)?)`/gi;
+  for (const m of tpContent.matchAll(fileRe)) {
+    const p = m[1].split('::')[0]; // strip function name
+    testFiles.add(p);
+  }
+
+  if (testFiles.size === 0) return null;
+
+  // Check each test file for TODO stubs
+  const stubs = [];
+  for (const tf of testFiles) {
+    const absPath = path.join(cwd, tf);
+    const testContent = safeRead(absPath);
+    if (!testContent) continue;
+    // Check for test stubs: assert False "TODO", fail("TODO"), TODO: 实现测试
+    const todoLine = testContent.match(/^(?!.*\*).*(assert\s+False|fail\s*\(|throw\s+new\s+\w+Exception).*TODO/im);
+    if (todoLine) {
+      stubs.push(`${tf}: ${todoLine[0].trim().slice(0, 80)}`);
+    }
+  }
+
+  if (stubs.length === 0) return null;
+
+  return {
+    id: 'tdd-stub-check',
+    level: 'block',
+    message: `build 阶段：${stubs.length} 个测试文件仍有 TODO 桩，必须先补全测试再写实现代码`,
+    detail: stubs.map(s => `  - ${s}`).join('\n')
+      + `\n\nTDD 铁律：Step 1 补全测试 → Step 2 确认 FAIL（红）→ Step 3 写实现代码。`,
+  };
+}
+
 // ---- main ----
 
 function main() {
@@ -171,6 +249,7 @@ function main() {
       () => checkPhaseBoundary(filePath, cwd),
       () => checkTasksSync(filePath, content, cwd),
       () => checkWritingPlansGate(filePath, cwd),
+      () => checkTddStubs(filePath, cwd),
     ];
     let blocked = false;
 
