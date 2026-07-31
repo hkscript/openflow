@@ -104,6 +104,7 @@ function checkTestPlan(cwd, changeName) {
       stats: null,
       issues: [{ type: 'missing', detail: 'test-plan.md not found' }],
       all_pass: false,
+      stub_issues: [],
     };
   }
 
@@ -111,6 +112,10 @@ function checkTestPlan(cwd, changeName) {
   const lines = content.split('\n');
   let inTable = false, headerSkipped = false;
   let pass = 0, todo = 0, fail = 0, total = 0;
+
+  // Also extract test file paths from the table
+  const testFiles = new Set();
+  const fileRe = /`([^`]+\.[a-z]{2,6})(?:::[^`]+)?`/gi;
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -123,17 +128,50 @@ function checkTestPlan(cwd, changeName) {
     if (/✅|PASS/i.test(line)) pass++;
     else if (/FAIL|❌.*FAIL/i.test(line)) fail++;
     else todo++;
+
+    // Extract test file paths from this row
+    for (const m of line.matchAll(fileRe)) {
+      const p = m[1].split('::')[0]; // strip function name
+      testFiles.add(p);
+    }
   }
 
   const issues = [];
   if (total === 0) issues.push({ type: 'empty', detail: 'No test rows found in table' });
   if (fail > 0) issues.push({ type: 'has_failures', detail: `${fail} test(s) marked FAIL` });
 
+  // Firewall: check actual test files for TODO stubs
+  const stubIssues = [];
+  for (const tf of testFiles) {
+    const testContent = safeRead(path.join(cwd, tf));
+    if (!testContent) {
+      stubIssues.push({ type: 'missing_file', file: tf, detail: `test-plan references ${tf} but file not found` });
+      continue;
+    }
+    // Check for test stubs that were never completed
+    const stubMatch = testContent.match(/assert\s+False.*TODO|fail\s*\(.*TODO|TODO.*实现测试/gi);
+    if (stubMatch) {
+      stubIssues.push({
+        type: 'stub_found',
+        file: tf,
+        detail: `${tf} still has TODO stub: ${stubMatch[0].trim().slice(0, 80)}`,
+      });
+    }
+  }
+
+  if (stubIssues.length > 0 && pass > 0) {
+    issues.push({
+      type: 'marker_mismatch',
+      detail: `${pass} test(s) marked PASS in test-plan but ${stubIssues.length} test file(s) still have TODO stubs — markers may be fabricated`,
+    });
+  }
+
   return {
-    pass: total > 0 && fail === 0,
+    pass: total > 0 && fail === 0 && stubIssues.length === 0,
     stats: { pass, todo, fail, total },
     issues,
-    all_pass: total > 0 && pass === total,
+    all_pass: total > 0 && pass === total && stubIssues.length === 0,
+    stub_issues: stubIssues,
   };
 }
 
