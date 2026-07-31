@@ -35,24 +35,16 @@ description: Test-first implementation driven by test-plan.md — generate test 
 
 #### 0.1 Superpowers writing-plans（硬性依赖）
 
-**必须可用**。检测方式（两种形式都算）：
+**必须可用**。运行 gate 脚本检测（同步检查 skill 文件和 Claude Code 插件）：
 
 ```bash
-# 检查 skill 文件（项目本地 + 全局）
-ls .claude/skills/writing-plans/SKILL.md ~/.claude/skills/writing-plans/SKILL.md 2>/dev/null && echo "✅ skill found" || echo "no skill file"
-
-# 检查 Claude Code 插件
-cat ~/.claude/plugins/installed_plugins.json 2>/dev/null | grep -q '"superpowers@"' && echo "✅ plugin found" || echo "no plugin"
+node <base>/.claude/hooks/openflow-gate.mjs check-writing-plans
 ```
 
-两者任一存在即满足。该依赖由 enforcement hook 强制：`.openflow/building` 标记存在时，若 writing-plans 未检测到（已查 skills 目录和 superpowers 插件），实现类代码编辑会被阻断。
+该依赖由 enforcement hook 强制：`.openflow/building` 标记存在时，若 writing-plans 未检测到，实现类代码编辑会被阻断。
 
-不满足则**删除 `.openflow/building` 标记后报错终止**（避免遗留标记阻断后续操作）：
-> "❌ build 阶段需要 Superpowers writing-plans。请先安装该 skill 或插件，然后重试。"
->
-> 安装方式：
-> - 插件（推荐）：`/plugin install superpowers@claude-plugins-official`
-> - 手动：下载 writing-plans 并放入 `.claude/skills/writing-plans/SKILL.md`
+不满足则**删除 `.openflow/building` 标记后报错终止**：
+> "❌ build 阶段需要 Superpowers writing-plans。请先安装：`/plugin install superpowers@claude-plugins-official`，然后重试。"
 
 #### 0.2 测试框架（需确认）
 

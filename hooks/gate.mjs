@@ -9,18 +9,20 @@
  *   node .claude/hooks/openflow-gate.mjs <subcommand> <change-name>
  *
  * Subcommands:
- *   check-proposal    — validate proposal.md format
- *   check-test-plan   — test-plan.md integrity
- *   check-cross-ref   — plan-ready ↔ test-plan cross-reference
- *   check-build-done  — build completion
- *   check-close-ready — close pre-conditions
- *   check-amend-count — amendment tracking
+ *   check-proposal      — validate proposal.md format
+ *   check-test-plan     — test-plan.md integrity
+ *   check-cross-ref     — plan-ready ↔ test-plan cross-reference
+ *   check-build-done    — build completion
+ *   check-close-ready   — close pre-conditions
+ *   check-amend-count   — amendment tracking
+ *   check-writing-plans — writing-plans availability (no change name needed)
  *
  * Zero dependencies, pure Node 20+.
  */
 
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { execSync } from 'child_process';
 
 // ---- helpers ----
@@ -300,6 +302,62 @@ function checkAmendCount(cwd, changeName) {
   };
 }
 
+// ---- check-writing-plans ----
+
+function checkWritingPlans(cwd) {
+  const home = os.homedir();
+
+  // Check skill files (local + global)
+  const skillCandidates = [
+    path.join(cwd, '.claude/skills/writing-plans/SKILL.md'),
+    path.join(home, '.claude/skills/writing-plans/SKILL.md'),
+    path.join(cwd, '.opencode/skills/writing-plans/SKILL.md'),
+    path.join(home, '.config/opencode/skills/writing-plans/SKILL.md'),
+  ];
+  let foundPath = null;
+  let foundType = null;
+  for (const c of skillCandidates) {
+    if (exists(c)) { foundPath = c; foundType = 'skill'; break; }
+  }
+
+  // Check Claude Code plugin
+  if (!foundPath) {
+    const pluginsFile = path.join(home, '.claude/plugins/installed_plugins.json');
+    if (exists(pluginsFile)) {
+      try {
+        const data = JSON.parse(fs.readFileSync(pluginsFile, 'utf-8'));
+        const plugins = data && data.plugins;
+        if (plugins && typeof plugins === 'object') {
+          for (const [key, value] of Object.entries(plugins)) {
+            if (!key.startsWith('superpowers@')) continue;
+            const entries = Array.isArray(value) ? value : [value];
+            for (const entry of entries) {
+              const installPath = entry && entry.installPath;
+              const wpSkill = installPath ? path.join(installPath, 'skills/writing-plans/SKILL.md') : null;
+              if (wpSkill && exists(wpSkill)) {
+                foundPath = wpSkill;
+                foundType = 'plugin';
+                break;
+              }
+            }
+            if (foundPath) break;
+          }
+        }
+      } catch { /* ignore */ }
+    }
+  }
+
+  return {
+    pass: foundPath !== null,
+    found_type: foundType,
+    found_path: foundPath,
+    install_hint: foundPath
+      ? null
+      : 'Install: /plugin install superpowers@claude-plugins-official (recommended)\n'
+        + 'Or: download writing-plans to .claude/skills/writing-plans/SKILL.md',
+  };
+}
+
 // ---- main ----
 
 function main() {
@@ -308,9 +366,15 @@ function main() {
   const subcommand = args[0];
   const changeName = args[1];
 
+  // check-writing-plans doesn't need a change name
+  if (subcommand === 'check-writing-plans') {
+    process.stdout.write(JSON.stringify(checkWritingPlans(cwd), null, 2) + '\n');
+    return;
+  }
+
   if (!subcommand || !changeName) {
     process.stderr.write('Usage: openflow-gate.mjs <subcommand> <change-name>\n');
-    process.stderr.write('Subcommands: check-proposal, check-test-plan, check-cross-ref, check-build-done, check-close-ready, check-amend-count\n');
+    process.stderr.write('Subcommands: check-proposal, check-test-plan, check-cross-ref, check-build-done, check-close-ready, check-amend-count, check-writing-plans\n');
     process.exit(1);
   }
 
