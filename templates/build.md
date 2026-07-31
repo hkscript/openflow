@@ -48,13 +48,19 @@ node <base>/.claude/hooks/openflow-gate.mjs check-writing-plans
 
 #### 0.2 测试框架（需确认）
 
-检测项目是否有可运行的测试框架（pytest/jest/go test/cargo test 等）。
+**先运行脚本检测**：
 
-**如果检测到测试框架** → 继续流程。
+```bash
+node <base>/.claude/hooks/openflow-gate.mjs check-test-framework
+```
 
-**如果未检测到测试框架**，按以下步骤处理：
+输出包含 `language`、`framework`、`test_command`、`test_dir`。
 
-1. **分析项目技术栈**：根据项目文件（`package.json`、`Cargo.toml`、`go.mod`、`requirements.txt`、`pyproject.toml` 等）判断语言和项目类型
+**如果检测到测试框架**（`pass: true`）→ 继续流程。
+
+**如果未检测到测试框架**（`pass: false`），按以下步骤处理：
+
+1. **分析项目技术栈**：根据项目文件判断语言和项目类型
 2. **给出推荐方案**：按技术栈推荐最合适的测试框架，附带理由和安装命令
 3. **询问用户**：
    > "⚠️ 项目未检测到可运行的测试框架。

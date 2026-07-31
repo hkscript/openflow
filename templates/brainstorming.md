@@ -19,10 +19,16 @@ description: Deep design powered by Superpowers brainstorming — openflow sets 
 
 ### 0. 前置检查
 
-Superpowers brainstorming **必须可用**。检查当前工具的本地或全局 skills 目录下是否存在 `brainstorming/SKILL.md`。
+Superpowers brainstorming **必须可用**。运行 gate 脚本检测（同步检查 skill 文件和 Claude Code 插件）：
+
+```bash
+node <base>/.claude/hooks/openflow-gate.mjs check-brainstorming
+```
+
+脚本不可用时，手动检查本地或全局 skills 目录下是否存在 `brainstorming/SKILL.md`。
 
 如果不存在，报错终止：
-> "❌ Superpowers brainstorming 未安装。openflow brainstorming 依赖 Superpowers 做深度探索。请先安装 Superpowers，然后重试。安装方式：..."
+> "❌ Superpowers brainstorming 未安装。openflow brainstorming 依赖 Superpowers 做深度探索。请先安装：`/plugin install superpowers@claude-plugins-official`，然后重试。"
 
 ### 1. 读取上下文（openflow 负责）
 

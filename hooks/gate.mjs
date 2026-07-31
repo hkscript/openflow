@@ -9,13 +9,15 @@
  *   node .claude/hooks/openflow-gate.mjs <subcommand> <change-name>
  *
  * Subcommands:
- *   check-proposal      — validate proposal.md format
- *   check-test-plan     — test-plan.md integrity
- *   check-cross-ref     — plan-ready ↔ test-plan cross-reference
- *   check-build-done    — build completion
- *   check-close-ready   — close pre-conditions
- *   check-amend-count   — amendment tracking
- *   check-writing-plans — writing-plans availability (no change name needed)
+ *   check-proposal        — validate proposal.md format
+ *   check-test-plan       — test-plan.md integrity
+ *   check-cross-ref       — plan-ready ↔ test-plan cross-reference
+ *   check-build-done      — build completion
+ *   check-close-ready     — close pre-conditions
+ *   check-amend-count     — amendment tracking
+ *   check-writing-plans   — writing-plans availability
+ *   check-brainstorming   — brainstorming availability
+ *   check-test-framework  — detect language + test framework + command
  *
  * Zero dependencies, pure Node 20+.
  */
@@ -358,6 +360,125 @@ function checkWritingPlans(cwd) {
   };
 }
 
+// ---- check-test-framework ----
+
+function checkTestFramework(cwd) {
+  // Check config files in priority order
+  const configs = [
+    { file: 'package.json', lang: 'javascript/typescript', parse: (c) => {
+      const pkg = JSON.parse(c);
+      const devDeps = { ...pkg.devDependencies, ...pkg.dependencies };
+      if (devDeps.jest || devDeps['ts-jest'] || devDeps.vitest) {
+        const fw = devDeps.vitest ? 'vitest' : 'jest';
+        return { framework: fw, cmd: devDeps.vitest ? 'npx vitest run' : 'npx jest' };
+      }
+      if (devDeps.mocha) return { framework: 'mocha', cmd: 'npx mocha' };
+      if (devDeps['@playwright/test']) return { framework: 'playwright', cmd: 'npx playwright test' };
+      if (pkg.scripts?.test) return { framework: 'npm', cmd: 'npm test', fromScript: true };
+      return null;
+    }},
+    { file: 'pyproject.toml', lang: 'python', parse: (c) => {
+      if (c.includes('[tool.pytest') || c.includes('pytest')) return { framework: 'pytest', cmd: 'pytest -v' };
+      return null;
+    }},
+    { file: 'requirements.txt', lang: 'python', parse: (c) => {
+      if (c.includes('pytest')) return { framework: 'pytest', cmd: 'pytest -v' };
+      if (c.includes('unittest')) return { framework: 'unittest', cmd: 'python -m unittest' };
+      return null;
+    }},
+    { file: 'go.mod', lang: 'go', parse: () => ({ framework: 'go test', cmd: 'go test ./...' }) },
+    { file: 'Cargo.toml', lang: 'rust', parse: () => ({ framework: 'cargo test', cmd: 'cargo test' }) },
+    { file: 'Makefile', lang: 'c/c++', parse: (c) => {
+      if (c.includes('test:')) return { framework: 'make', cmd: 'make test' };
+      return null;
+    }},
+  ];
+
+  for (const { file, lang, parse } of configs) {
+    const content = safeRead(path.join(cwd, file));
+    if (!content) continue;
+    const result = parse(content);
+    if (result) {
+      // Detect test directory
+      let testDir = null;
+      const candidates = ['tests', '__tests__', 'test', 'spec', 'e2e'];
+      for (const d of candidates) {
+        if (exists(path.join(cwd, d))) { testDir = d; break; }
+      }
+      return {
+        pass: true,
+        language: lang,
+        framework: result.framework,
+        test_command: result.cmd,
+        test_dir: testDir,
+        from_script: result.fromScript || false,
+      };
+    }
+  }
+
+  return {
+    pass: false,
+    language: null,
+    framework: null,
+    test_command: null,
+    test_dir: null,
+    hint: 'No test framework detected. Check package.json, pyproject.toml, go.mod, Cargo.toml, or Makefile.',
+  };
+}
+
+// ---- check-brainstorming ----
+
+function checkBrainstorming(cwd) {
+  const home = os.homedir();
+
+  const skillCandidates = [
+    path.join(cwd, '.claude/skills/brainstorming/SKILL.md'),
+    path.join(home, '.claude/skills/brainstorming/SKILL.md'),
+    path.join(cwd, '.opencode/skills/brainstorming/SKILL.md'),
+    path.join(home, '.config/opencode/skills/brainstorming/SKILL.md'),
+  ];
+  let foundPath = null;
+  let foundType = null;
+  for (const c of skillCandidates) {
+    if (exists(c)) { foundPath = c; foundType = 'skill'; break; }
+  }
+
+  if (!foundPath) {
+    const pluginsFile = path.join(home, '.claude/plugins/installed_plugins.json');
+    if (exists(pluginsFile)) {
+      try {
+        const data = JSON.parse(fs.readFileSync(pluginsFile, 'utf-8'));
+        const plugins = data && data.plugins;
+        if (plugins && typeof plugins === 'object') {
+          for (const [key, value] of Object.entries(plugins)) {
+            if (!key.startsWith('superpowers@')) continue;
+            const entries = Array.isArray(value) ? value : [value];
+            for (const entry of entries) {
+              const installPath = entry && entry.installPath;
+              const skillPath = installPath ? path.join(installPath, 'skills/brainstorming/SKILL.md') : null;
+              if (skillPath && exists(skillPath)) {
+                foundPath = skillPath;
+                foundType = 'plugin';
+                break;
+              }
+            }
+            if (foundPath) break;
+          }
+        }
+      } catch { /* ignore */ }
+    }
+  }
+
+  return {
+    pass: foundPath !== null,
+    found_type: foundType,
+    found_path: foundPath,
+    install_hint: foundPath
+      ? null
+      : 'Install: /plugin install superpowers@claude-plugins-official',
+  };
+}
+
 // ---- main ----
 
 function main() {
@@ -366,15 +487,23 @@ function main() {
   const subcommand = args[0];
   const changeName = args[1];
 
-  // check-writing-plans doesn't need a change name
+  // check-writing-plans / check-brainstorming / check-test-framework don't need a change name
   if (subcommand === 'check-writing-plans') {
     process.stdout.write(JSON.stringify(checkWritingPlans(cwd), null, 2) + '\n');
+    return;
+  }
+  if (subcommand === 'check-brainstorming') {
+    process.stdout.write(JSON.stringify(checkBrainstorming(cwd), null, 2) + '\n');
+    return;
+  }
+  if (subcommand === 'check-test-framework') {
+    process.stdout.write(JSON.stringify(checkTestFramework(cwd), null, 2) + '\n');
     return;
   }
 
   if (!subcommand || !changeName) {
     process.stderr.write('Usage: openflow-gate.mjs <subcommand> <change-name>\n');
-    process.stderr.write('Subcommands: check-proposal, check-test-plan, check-cross-ref, check-build-done, check-close-ready, check-amend-count, check-writing-plans\n');
+    process.stderr.write('Subcommands: check-proposal, check-test-plan, check-cross-ref, check-build-done, check-close-ready, check-amend-count, check-writing-plans, check-brainstorming, check-test-framework\n');
     process.exit(1);
   }
 
