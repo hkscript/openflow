@@ -55,9 +55,11 @@ description: Call OpenSpec to generate specs + translate to plan-ready.md, auto-
 
 **在生成任何文件之前，先校验 proposal.md 格式（阻塞性检查）：**
 
+gate.mjs 路径：将你读取的 SKILL.md 路径中的 `skills/openflow/SKILL.md` 替换为 `hooks/openflow-gate.mjs`。
+
 ```bash
 # 方式 1：脚本校验（推荐）
-node .claude/hooks/openflow-gate.mjs check-proposal <变更名>
+node <base>/.claude/hooks/openflow-gate.mjs check-proposal <变更名>
 
 # 方式 2：手动 grep（脚本不可用时）
 grep -q '^## Why' openspec/changes/<变更名>/proposal.md && echo "✅ Why 存在" || echo "❌ 缺少 ## Why"
@@ -303,7 +305,7 @@ grep -rn "methodName" src/ --include="*.java" -B 5
 | 测试类型匹配 | 检查 test-plan.md 的"类型"列与测试文件位置 | 单元测试不在集成目录 |
 | 任务顺序合理 | 检查 plan-ready.md 的 task 依赖关系 | 被依赖方排在前面 |
 
-**辅助脚本**：`node .claude/hooks/openflow-gate.mjs check-cross-ref <变更名>` 可自动检测 test-plan ↔ plan-ready 交叉引用问题（orphan_task / uncovered_test）。
+**辅助脚本**：gate.mjs `check-cross-ref` 可自动检测 test-plan ↔ plan-ready 交叉引用问题。路径同上。
 
 #### 7.5 依赖注入验证
 

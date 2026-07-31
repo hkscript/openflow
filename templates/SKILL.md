@@ -162,9 +162,13 @@ OpenSpec scenarios ──→ test-plan.md (场景→测试映射) ──→ Supe
 
 当用户调用 `/openflow` 不带子命令，或调用某个子命令需要确认前置条件时，**先运行状态检测脚本**：
 
+此 SKILL.md 路径为 `<base>/.claude/skills/openflow/SKILL.md`，将其中的 `skills/openflow/SKILL.md` 替换为 `hooks/openflow-detect.mjs` 即为脚本路径。
+
 ```bash
-node .claude/hooks/openflow-detect.mjs
+node <base>/.claude/hooks/openflow-detect.mjs
 ```
+
+脚本不存在时（旧版 openflow 未升级），回退到下方"手动状态检测"。
 
 脚本收集以下信号并输出 JSON：
 
@@ -197,6 +201,22 @@ node .claude/hooks/openflow-detect.mjs
 - 实现进行中（部分测试 PASS） → 继续 build 阶段（断点恢复）
 - 实现已完成（所有测试 PASS） → verify 阶段
 - verify 已通过 → close 阶段
+
+### 手动状态检测（脚本不可用时的降级方案）
+
+如果 `openflow-detect.mjs` 不存在（旧版 openflow 未升级），手动执行以下步骤，**且必须遵守铁律 5（否定即暂停）**：
+
+| 检查项 | 怎么查 | 结果 | 可靠性 |
+|--------|--------|------|--------|
+| 有活跃变更？ | `ls openspec/changes/` 下是否有非 archive 子目录 | 有→继续 | high |
+| git 有实现 commit？ | `git log --oneline -20` | 有→肯定信号 | high |
+| 有 test-plan.md？ | 变更目录下是否存在 | 有→看测试状态 | high |
+| 有 plan-ready.md？ | 变更目录下是否存在 | 有→看实现状态 | high |
+| 实现已开始？ | `ls docs/superpowers/plans/` | 有→肯定信号 | medium |
+| 测试全部通过？ | test-plan.md 中 PASS/TODO/FAIL | 全部 PASS→肯定信号 | medium |
+| 改动文件可找到？ | plan-ready.md 列出的文件逐个 ls | 全找到→肯定，缺几个→低权重 | low |
+
+**矛盾信号处理**：高/中可靠性 ≥2 肯定信号 + 低可靠性否定信号 → 暂停确认，不判"未开始"。
 
 ## 路由
 

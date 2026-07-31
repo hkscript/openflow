@@ -104,7 +104,8 @@ grep -oP '### Task \d+: .+' openspec/changes/<变更名>/plan-ready.md \
 
 ```bash
 # 推荐：脚本校验（同时检查 proposal 格式 + openspec validate + building 标记）
-node .claude/hooks/openflow-gate.mjs check-close-ready <变更名>
+# 路径推导：SKILL.md 路径中将 skills/openflow/SKILL.md → hooks/openflow-gate.mjs
+node <base>/.claude/hooks/openflow-gate.mjs check-close-ready <变更名>
 
 # 或手动 grep
 grep -q '^## Why' openspec/changes/<变更名>/proposal.md && echo "✅ Why 存在" || echo "❌ 缺少 ## Why"

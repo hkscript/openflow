@@ -196,7 +196,7 @@ Step 8: 更新 test-plan.md 中对应测试行的状态为 ✅
 2. **全量测试回归通过**：所有新老测试 PASS，无回归
 3. **所有 task checkbox 已勾选**：plan-ready.md 中无未勾选的 task
 
-**辅助脚本**：`node .claude/hooks/openflow-gate.mjs check-build-done <变更名>` 可自动检测 task 完成状态、测试 PASS 情况和 building 标记。
+**辅助脚本**：gate.mjs `check-build-done <变更名>` 可自动检测 task 完成状态、测试 PASS 情况和 building 标记。路径推导同上（`skills/openflow/SKILL.md` → `hooks/openflow-gate.mjs`）。
 
 全部满足后，**删除 `.openflow/building` 标记文件**（退出 build 阶段），然后输出：
 > "所有实现任务已完成，测试全部通过（N 个测试覆盖 M 个场景），[前端/后端/全栈] 均已修改完毕。

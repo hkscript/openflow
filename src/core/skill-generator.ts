@@ -62,7 +62,7 @@ export function generateSkills(options: GenerateOptions): void {
 
     // Install enforcement hooks
     if (toolPaths.hooksDir && toolPaths.settingsFile) {
-      installHooks(baseDir, toolPaths);
+      installHooks(baseDir, toolPaths, global);
     }
 
     // Install OpenCode plugin
@@ -158,12 +158,15 @@ description: "Quick start ${phase} phase. Use /openflow-${phase} to ${descriptio
 `;
 }
 
-function installHooks(baseDir: string, toolPaths: typeof TOOL_PATHS['claude']): void {
+function installHooks(baseDir: string, toolPaths: typeof TOOL_PATHS['claude'], global: boolean): void {
   const hooksDir = path.join(baseDir, toolPaths.hooksDir!);
   const settingsFile = path.join(baseDir, toolPaths.settingsFile!);
   const hookScriptSrc = path.join(HOOKS_DIR, 'enforce.mjs');
   const hookScriptDest = path.join(hooksDir, 'openflow-enforce.mjs');
   const oldPyHook = path.join(hooksDir, 'openflow-enforce.py');
+
+  // Display path: prefix with ~/ for global installs
+  const display = (p: string) => global ? path.join('~', path.relative(baseDir, p)) : path.relative(baseDir, p);
 
   if (!fileExists(hookScriptSrc)) {
     logger.warn('Hook script not found, skipping enforcement hooks setup');
@@ -178,13 +181,13 @@ function installHooks(baseDir: string, toolPaths: typeof TOOL_PATHS['claude']): 
   // Cleanup old Python hook
   if (fileExists(oldPyHook)) {
     fs.unlinkSync(oldPyHook);
-    logger.step(`  Removed legacy hook: ${path.relative(baseDir, oldPyHook)}`);
+    logger.step(`  Removed legacy hook: ${display(oldPyHook)}`);
   }
 
   // Copy hook script
   fs.copyFileSync(hookScriptSrc, hookScriptDest);
   fs.chmodSync(hookScriptDest, 0o755);
-  logger.step(`  Hook installed: ${path.relative(baseDir, hookScriptDest)}`);
+  logger.step(`  Hook installed: ${display(hookScriptDest)}`);
 
   // Copy state detection and gate scripts
   const detectSrc = path.join(HOOKS_DIR, 'detect.mjs');
@@ -193,13 +196,13 @@ function installHooks(baseDir: string, toolPaths: typeof TOOL_PATHS['claude']): 
     const detectDest = path.join(hooksDir, 'openflow-detect.mjs');
     fs.copyFileSync(detectSrc, detectDest);
     fs.chmodSync(detectDest, 0o755);
-    logger.step(`  Detect script: ${path.relative(baseDir, detectDest)}`);
+    logger.step(`  Detect script: ${display(detectDest)}`);
   }
   if (fileExists(gateSrc)) {
     const gateDest = path.join(hooksDir, 'openflow-gate.mjs');
     fs.copyFileSync(gateSrc, gateDest);
     fs.chmodSync(gateDest, 0o755);
-    logger.step(`  Gate script: ${path.relative(baseDir, gateDest)}`);
+    logger.step(`  Gate script: ${display(gateDest)}`);
   }
 
   // Merge hooks into settings.json
