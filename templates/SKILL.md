@@ -158,6 +158,20 @@ OpenSpec scenarios ──→ test-plan.md (场景→测试映射) ──→ Supe
 - `openspec archive` 会生成正确的归档目录名（`YYYY-MM-DD-<变更名>`）
 - 使用 `mv` 会导致规格不更新、验证缺失、归档格式错误
 
+## 多项目工作区
+
+当 VSCode workspace 包含多个项目目录时，**必须先确认主项目**——所有 OpenSpec 规格文件和 `openspec/changes/` 必须在主项目中。
+
+**规则：本会话中如果还没和用户确认过主项目，则先确认主项目（AskUserQuestion），然后记住结论供本会话后续使用。**
+
+确认方法：
+1. 检查有哪些目录包含 `openspec/changes/`（含非 archive 子目录）或 `openspec/project.md`
+2. 如果只有 1 个 → 直接确认就是它
+3. 如果有多个 → AskUserQuestion 让用户确认哪个是主项目
+4. 如果都没有 → 选择用户当前操作的文件所在项目，或询问用户
+
+后续所有 `/openflow` 操作（proposal、spec、build 等）的 **cwd 必须切到主项目目录**。
+
 ## 状态检测
 
 当用户调用 `/openflow` 不带子命令，或调用某个子命令需要确认前置条件时，**先运行状态检测脚本**：
