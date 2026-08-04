@@ -205,13 +205,32 @@ function collectFileResolvability(cwd, changeDir) {
 }
 
 /**
- * Check if verify-issues.md exists.
+ * Count unresolved markers in verify-issues.md content.
+ * 与 gate.mjs checkVerifyIssues 同一模型：❌/⚠️ 开启条目，后续 ✅ 关闭最近一个未关闭条目。
+ */
+function countVerifyUnresolved(content) {
+  const stack = [];
+  for (const line of content.split('\n')) {
+    if (/❌/.test(line)) stack.push('hard');
+    else if (/⚠️/.test(line)) stack.push('soft');
+    if (/✅/.test(line) && stack.length > 0) stack.pop();
+  }
+  return stack.length;
+}
+
+/**
+ * Check if verify-issues.md exists and count unresolved markers.
  */
 function collectVerifyIssues(changeDir) {
   const viPath = path.join(changeDir, 'verify-issues.md');
   if (!exists(viPath)) return null;
   const content = safeRead(viPath);
-  return { exists: true, path: viPath, hasContent: content ? content.length > 50 : false };
+  return {
+    exists: true,
+    path: viPath,
+    hasContent: content ? content.length > 50 : false,
+    unresolved_count: content ? countVerifyUnresolved(content) : 0,
+  };
 }
 
 /**
@@ -283,7 +302,7 @@ function detectContradictions(signals, changeName) {
     } else if (key === 'building_marker') {
       desc = v ? 'building_marker: exists' : 'building_marker: not present';
     } else if (key === 'verify_issues') {
-      desc = v && v.exists ? 'verify_issues: exists' : null;
+      desc = v && v.exists ? `verify_issues: exists${v.unresolved_count > 0 ? ` (${v.unresolved_count} unresolved)` : ''}` : null;
     } else if (key === 'active_changes') {
       desc = `active_changes: ${Array.isArray(v) ? v.length : 0} change(s)`;
     } else {
@@ -363,6 +382,14 @@ function suggestPhase(signals, contradictions, changeCount) {
   }
 
   if (tpStats.allPass) {
+    const vi = signals.verify_issues?.value;
+    if (vi?.exists && (vi.unresolved_count ?? 0) > 0) {
+      return {
+        phase: 'verify',
+        reason: 'verify_issues_unresolved',
+        note: `verify-issues.md 仍有 ${vi.unresolved_count} 项未解决，需重跑 /openflow verify 更新记录`,
+      };
+    }
     return { phase: 'verify', reason: 'all_tests_pass' };
   }
 
@@ -457,6 +484,8 @@ function main() {
     if (tp) parts.push(`${tp.pass}/${tp.total} PASS`);
     if (pr) parts.push(`${pr.done}/${pr.total} tasks [x]`);
     if (git?.hasRelatedCommits) parts.push(`${git.relatedCount} git commits`);
+    const vi = signals.verify_issues?.value;
+    if (vi?.exists && (vi.unresolved_count ?? 0) > 0) parts.push(`⚠️ verify-issues ${vi.unresolved_count} 项未解决`);
     if (contradictions.length > 0) parts.push('⚠️ 信号矛盾，需确认');
     else parts.push(`建议 ${suggestion.phase}`);
     humanSummary = parts.join(', ') + '。';

@@ -364,13 +364,16 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 ```js
 /**
  * Count unresolved markers in verify-issues.md content.
- * ❌ 阻挡项被 ✅已解决/✅已修复 抵消；⚠️ 警告被 ✅通过/✅已解决/✅已修复 抵消。
+ * 与 gate.mjs checkVerifyIssues 同一模型：❌/⚠️ 开启条目，后续 ✅ 关闭最近一个未关闭条目。
  */
 function countVerifyUnresolved(content) {
-  const count = (re) => (content.match(re) ?? []).length;
-  const hard = Math.max(0, count(/❌/g) - count(/✅\s*已解决|✅\s*已修复/g));
-  const soft = Math.max(0, count(/⚠️/g) - count(/✅\s*通过|✅\s*已解决|✅\s*已修复/g));
-  return hard + soft;
+  const stack = [];
+  for (const line of content.split('\n')) {
+    if (/❌/.test(line)) stack.push('hard');
+    else if (/⚠️/.test(line)) stack.push('soft');
+    if (/✅/.test(line) && stack.length > 0) stack.pop();
+  }
+  return stack.length;
 }
 
 /**
@@ -429,11 +432,12 @@ function collectVerifyIssues(changeDir) {
 - [ ] **Step 5: 手动验证**
 
 ```bash
-FIX=/tmp/flowfix-dt && rm -rf "$FIX" && mkdir -p "$FIX/openspec/changes/demo" && cd "$FIX"
+FIX=/tmp/flowfix-dt && rm -rf "$FIX" && mkdir -p "$FIX/openspec/changes/demo" "$FIX/src" && cd "$FIX"
 DETECT=/home/hk/github/openflow/hooks/detect.mjs
 N20=$(pnpm node -e 'process.stdout.write(process.execPath)')
-printf '| #1 | REQ-1 | 场景A | tests/test_a.py | test_a | ✅ PASS |\n' > openspec/changes/demo/test-plan.md
-printf '### Task 1: x\n- [x] task\n- 改动文件：src/base.py [Verified]\n' > openspec/changes/demo/plan-ready.md
+printf 'x\n' > "$FIX/src/base.py"   # 仓库根目录，必须存在——否则 file_resolvability 否定信号触发铁律5矛盾，不路由
+printf '| # | Requirement | Scenario | 测试文件 | 测试函数 | 状态 |\n|---|---|---|---|---|---|\n| #1 | REQ-1 | 场景A | tests/test_a.py | test_a | ✅ PASS |\n' > openspec/changes/demo/test-plan.md
+printf '### Task 1: x\n- [x] task\n- 改动文件：src/base.py\n' > openspec/changes/demo/plan-ready.md   # 不加 [Verified] 后缀，避免 collectFileResolvability 吞后缀导致解析失败
 printf '## 现状与影响面\n\n### 改动点\n- src/base.py [Verified]\n' > openspec/changes/demo/design.md
 printf '#1 ❌ 未解决\n' > openspec/changes/demo/verify-issues.md
 
