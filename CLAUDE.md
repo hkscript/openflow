@@ -38,13 +38,22 @@ bin/openflow.js    CLI 入口
 
 ## 开发约定
 
+- **用 pnpm 执行**：`engines.node >=20`，系统 PATH 上的 `node` 可能是旧版（本项目环境为 v14，直接跑 `openflow init` 会因 `node:util.styleText` 缺失报错）。pnpm 自带 Node 20+（`pnpm node` / `pnpm run` 自动用正确版本），本项目命令一律走 pnpm。
 - **改动模板/hook 后，测试方式**：
   ```bash
-  npm run build && cd /tmp/test-openflow && mkdir -p openspec \
-    && openflow init --tools claude \
-    && node .claude/hooks/openflow-detect.mjs        # 测试状态检测
+  REPO=$(pwd)                                  # 本仓库绝对路径
+  N20=$(pnpm node -e 'process.stdout.write(process.execPath)')   # pnpm 管理的 Node 20+
+  pnpm run build \
+    && rm -rf /tmp/test-openflow && mkdir -p /tmp/test-openflow \
+    && cd /tmp/test-openflow \
+    && echo "n" | "$N20" "$REPO"/bin/openflow.js init --tools claude \
+    && "$N20" .claude/hooks/openflow-detect.mjs        # 测试状态检测
   ```
+  说明：
+  - `echo "n"` 回答非交互 shell 里 init 的 "Run openspec init?" 确认（hook 安装不受影响）；
+  - 空临时目录没有 `node_modules/.bin`，`pnpm exec openflow` 不可用，须用 pnpm 的 node 二进制跑 CLI 绝对路径；
+  - 若要验证 `test_plan_stats` 计数，建一个 `openspec/changes/<名>/test-plan.md` 再跑 detect。
   在临时目录验证，不在本项目内吃狗粮（`.claude/` 已 gitignore）。
 - **新增 hook 脚本时**：放 `hooks/` 目录，在 `src/core/skill-generator.ts` 的 `installHooks()` 中注册拷贝逻辑
 - **脚本零依赖**：所有 `.mjs` 脚本必须是纯 Node 20+，不依赖 npm 包
-- **TypeScript 构建**：`npm run build`（tsc），输出到 `dist/`
+- **TypeScript 构建**：`pnpm run build`（tsc），输出到 `dist/`
