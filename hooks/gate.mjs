@@ -15,6 +15,7 @@
  *   check-build-done      — build completion
  *   check-close-ready     — close pre-conditions
  *   check-verify-issues   — verify-issues.md 未解决项检查
+ *   check-design-consistency — design.md 文件表/现状影响面 vs plan-ready + git
  *   check-amend-count     — amendment tracking
  *   check-writing-plans   — writing-plans availability
  *   check-brainstorming   — brainstorming availability
@@ -294,6 +295,62 @@ function checkVerifyIssues(cwd, changeName) {
   if (unresolvedHard > 0) blockers.push(`${unresolvedHard} 个 verify 阻挡项（❌）未解决`);
   if (unresolvedSoft > 0) blockers.push(`${unresolvedSoft} 个 verify 警告（⚠️）未解决`);
   return { pass: unresolved === 0, exists: true, unresolved_count: unresolved, blockers };
+}
+
+// ---- check-design-consistency ----
+
+const FILE_PATH_RE = /[A-Za-z0-9_@./-]+\.(?:ts|tsx|js|jsx|mjs|cjs|vue|py|go|java|rs|c|cc|cpp|h|hpp|kt|swift|sql|sh|yml|yaml|json|css|scss|html)\b/g;
+const CERTAINTY_TAG_RE = /\[(?:Verified|Inferred|Assumption)/;
+
+function extractFilePaths(content) {
+  const paths = new Set();
+  if (!content) return [];
+  for (const line of content.split('\n')) {
+    if (!CERTAINTY_TAG_RE.test(line)) continue;
+    for (const m of line.matchAll(FILE_PATH_RE)) {
+      const p = m[0].replace(/^\.\//, '');
+      if (p.startsWith('openspec/') || p.endsWith('.md')) continue;
+      paths.add(p);
+    }
+  }
+  return [...paths];
+}
+
+function gitChangedFiles(cwd) {
+  try {
+    const out = execSync('git diff --name-only; git diff --cached --name-only', { cwd, encoding: 'utf-8', stdio: 'pipe' });
+    return [...new Set(out.split('\n').map((s) => s.trim()).filter(Boolean))];
+  } catch {
+    return [];
+  }
+}
+
+function checkDesignConsistency(cwd, changeName) {
+  const cd = changeDir(cwd, changeName);
+  const designContent = safeRead(path.join(cd, 'design.md'));
+  if (!designContent) {
+    return { pass: true, design_exists: false, design_file_count: 0, blockers: [] };
+  }
+  const blockers = [];
+  if (!designContent.includes('现状与影响面')) {
+    blockers.push('design.md 缺少「现状与影响面」章节（spec 阶段必填）');
+  }
+  const designPaths = extractFilePaths(designContent);
+  const planContent = safeRead(path.join(cd, 'plan-ready.md'));
+  const planPaths = planContent ? extractFilePaths(planContent) : [];
+  const gitPaths = gitChangedFiles(cwd);
+  const changedSet = new Set([...planPaths, ...gitPaths]);
+  for (const p of designPaths) {
+    if (!changedSet.has(p)) {
+      blockers.push(`design.md 列出 ${p}，但 plan-ready 改动文件 / 未提交变更中都没有它`);
+    }
+  }
+  for (const p of gitPaths) {
+    if (!designPaths.includes(p)) {
+      blockers.push(`未提交变更改动了 ${p}，但 design.md 现状影响面未列出`);
+    }
+  }
+  return { pass: blockers.length === 0, design_exists: true, design_file_count: designPaths.length, blockers };
 }
 
 // ---- check-close-ready ----
@@ -593,6 +650,9 @@ function main() {
       break;
     case 'check-verify-issues':
       result = checkVerifyIssues(cwd, changeName);
+      break;
+    case 'check-design-consistency':
+      result = checkDesignConsistency(cwd, changeName);
       break;
     default:
       process.stderr.write(`Unknown subcommand: ${subcommand}\n`);
