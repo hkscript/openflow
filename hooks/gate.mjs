@@ -358,6 +358,8 @@ function checkDesignConsistency(cwd, changeName) {
 function checkCloseReady(cwd, changeName) {
   const propCheck = checkProposal(cwd, changeName);
   const bMarker = exists(path.join(cwd, '.openflow', 'building'));
+  const verifyIssues = checkVerifyIssues(cwd, changeName);
+  const designConsistency = checkDesignConsistency(cwd, changeName);
 
   // Try openspec validate
   let openspecValid = null;
@@ -374,6 +376,8 @@ function checkCloseReady(cwd, changeName) {
   if (!propCheck.pass) blockers.push('proposal format invalid');
   if (!openspecValid) blockers.push(`openspec validate failed: ${openspecError}`);
   if (bMarker) blockers.push('building marker still present (build phase not exited cleanly)');
+  blockers.push(...verifyIssues.blockers);
+  blockers.push(...designConsistency.blockers);
 
   return {
     pass: blockers.length === 0,
@@ -381,6 +385,8 @@ function checkCloseReady(cwd, changeName) {
       proposal_format: propCheck.pass,
       openspec_validate: openspecValid,
       building_marker_clean: !bMarker,
+      verify_issues_resolved: verifyIssues.pass,
+      design_consistent: designConsistency.pass,
     },
     blockers,
   };
@@ -624,7 +630,7 @@ function main() {
 
   if (!subcommand || !changeName) {
     process.stderr.write('Usage: openflow-gate.mjs <subcommand> <change-name>\n');
-    process.stderr.write('Subcommands: check-proposal, check-test-plan, check-cross-ref, check-build-done, check-close-ready, check-amend-count, check-writing-plans, check-brainstorming, check-test-framework\n');
+    process.stderr.write('Subcommands: check-proposal, check-test-plan, check-cross-ref, check-build-done, check-close-ready, check-amend-count, check-writing-plans, check-brainstorming, check-test-framework, check-verify-issues, check-design-consistency\n');
     process.exit(1);
   }
 
