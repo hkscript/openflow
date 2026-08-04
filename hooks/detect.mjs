@@ -59,9 +59,14 @@ function collectTestPlanStats(changeDir) {
   // ✅ PASS / ✅ / PASS
   // TODO / ❌ TODO / ⬜
   // FAIL / ❌ FAIL / ❌
-  const passRe = /✅\s*(?:PASS)?|PASS/gi;
-  const todoRe = /TODO|⬜|⏳/gi;
-  const failRe = /❌\s*(?:FAIL)?|FAIL/gi;
+  // Match a marker at the START of a table cell (`| ✅`), so we never
+  // count "pass" inside words like bypass/passed. No `g` flag: a global
+  // regex .test() keeps lastIndex across rows, silently skipping ~half
+  // of them (one match sets lastIndex to end-of-line; a shorter next
+  // line fails and resets before its marker is ever checked).
+  const passRe = /\|\s*(?:✅|PASS\b)/i;
+  const todoRe = /\|\s*(?:TODO\b|⬜|⏳)/i;
+  const failRe = /\|\s*(?:❌|FAIL\b)/i;
 
   // Split by table rows (lines starting with | after the header)
   const lines = content.split('\n');
