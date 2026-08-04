@@ -30,9 +30,11 @@
 - Produces: `checkVerifyIssues(cwd, changeName)` → `{ pass: boolean, exists: boolean, unresolved_count: number, blockers: string[] }`。Task 3 的 `checkCloseReady` 消费 `blockers`。
 
 **判定规则（写死在代码里，不靠 AI）：**
-- `❌` = 阻挡项，被 `✅ 已解决` / `✅ 已修复` 抵消
-- `⚠️` = 警告，被 `✅ 通过` / `✅ 已解决` / `✅ 已修复` 抵消
-- `unresolved_count = max(0, ❌数 − 硬抵消数) + max(0, ⚠️数 − 软抵消数)`
+- `❌` = 阻挡项，`⚠️` = 警告；`✅` = 已解决条目
+- 逐行状态机：`❌`/`⚠️` 开启一个条目，后续 `✅` 关闭**最近一个**未关闭条目（这样 `#1 ✅ 断言匹配 / #2 ⚠️ 未匹配` 里的 ✅ 只抵消 #1，不会误吞 #2）
+- `unresolved_count =` 结束时仍未关闭的条目数
+
+> 实现说明：初版「全局计数相减」（❌数−✅数）在真实格式下会双重消耗 resolver 而漏报（见场景 4）。改为逐行栈模型后四种场景全对。
 
 - [ ] **Step 1: 在 `check-close-ready` 函数区之前新增函数**
 
@@ -41,34 +43,26 @@
 ```js
 // ---- check-verify-issues ----
 
-const UNRESOLVED_HARD_RE = /❌/g;
-const RESOLVED_HARD_RE = /✅\s*已解决|✅\s*已修复/g;
-const UNRESOLVED_SOFT_RE = /⚠️/g;
-const RESOLVED_SOFT_RE = /✅\s*通过|✅\s*已解决|✅\s*已修复/g;
-
-function countOccurrences(content, re) {
-  const m = content.match(re);
-  return m ? m.length : 0;
-}
-
 function checkVerifyIssues(cwd, changeName) {
   const viPath = path.join(changeDir(cwd, changeName), 'verify-issues.md');
   const content = safeRead(viPath);
   if (!content) {
     return { pass: true, exists: false, unresolved_count: 0, blockers: [] };
   }
-  const blockersUnresolved = Math.max(
-    0,
-    countOccurrences(content, UNRESOLVED_HARD_RE) - countOccurrences(content, RESOLVED_HARD_RE)
-  );
-  const warningsUnresolved = Math.max(
-    0,
-    countOccurrences(content, UNRESOLVED_SOFT_RE) - countOccurrences(content, RESOLVED_SOFT_RE)
-  );
-  const unresolved = blockersUnresolved + warningsUnresolved;
+  // 逐行状态机：❌/⚠️ 开启一个条目，后续 ✅ 关闭最近一个未关闭条目。
+  // 这样 "#1 ✅ 断言匹配 / #2 ⚠️ 未匹配" 里的 ✅ 只抵消 #1，不会误吞 #2。
+  const stack = [];
+  for (const line of content.split('\n')) {
+    if (/❌/.test(line)) stack.push('hard');
+    else if (/⚠️/.test(line)) stack.push('soft');
+    if (/✅/.test(line) && stack.length > 0) stack.pop();
+  }
+  const unresolved = stack.length;
+  const unresolvedHard = stack.filter((t) => t === 'hard').length;
+  const unresolvedSoft = unresolved - unresolvedHard;
   const blockers = [];
-  if (blockersUnresolved > 0) blockers.push(`${blockersUnresolved} 个 verify 阻挡项（❌）未解决`);
-  if (warningsUnresolved > 0) blockers.push(`${warningsUnresolved} 个 verify 警告（⚠️）未解决`);
+  if (unresolvedHard > 0) blockers.push(`${unresolvedHard} 个 verify 阻挡项（❌）未解决`);
+  if (unresolvedSoft > 0) blockers.push(`${unresolvedSoft} 个 verify 警告（⚠️）未解决`);
   return { pass: unresolved === 0, exists: true, unresolved_count: unresolved, blockers };
 }
 ```
@@ -111,6 +105,8 @@ printf '#1 ❌ 测试错误\n#1 ✅ 已修复\n#2 ⚠️ 覆盖不足\n#2 ✅ �
 ```
 
 Expected：场景 1 `pass: true`、`exists: false`；场景 2 `pass: false`、`unresolved_count: 1`、blockers 含「1 个 verify 阻挡项（❌）未解决」；场景 3 `pass: true`、`unresolved_count: 0`。
+
+（补充真实格式场景：`#1 ✅ 断言匹配 / #2 ⚠️ 未匹配` 应报 `unresolved_count: 1`、blockers 含「1 个 verify 警告（⚠️）未解决」——✅ 只抵消 #1，不误吞 #2。）
 
 - [ ] **Step 5: Commit**
 

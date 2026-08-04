@@ -14,6 +14,7 @@
  *   check-cross-ref       — plan-ready ↔ test-plan cross-reference
  *   check-build-done      — build completion
  *   check-close-ready     — close pre-conditions
+ *   check-verify-issues   — verify-issues.md 未解决项检查
  *   check-amend-count     — amendment tracking
  *   check-writing-plans   — writing-plans availability
  *   check-brainstorming   — brainstorming availability
@@ -268,6 +269,31 @@ function checkBuildDone(cwd, changeName) {
     issues,
     fix_hint: bMarker ? 'Remove .openflow/building marker to exit build phase' : null,
   };
+}
+
+// ---- check-verify-issues ----
+
+function checkVerifyIssues(cwd, changeName) {
+  const viPath = path.join(changeDir(cwd, changeName), 'verify-issues.md');
+  const content = safeRead(viPath);
+  if (!content) {
+    return { pass: true, exists: false, unresolved_count: 0, blockers: [] };
+  }
+  // 逐行状态机：❌/⚠️ 开启一个条目，后续 ✅ 关闭最近一个未关闭条目。
+  // 这样 "#1 ✅ 断言匹配 / #2 ⚠️ 未匹配" 里的 ✅ 只抵消 #1，不会误吞 #2。
+  const stack = [];
+  for (const line of content.split('\n')) {
+    if (/❌/.test(line)) stack.push('hard');
+    else if (/⚠️/.test(line)) stack.push('soft');
+    if (/✅/.test(line) && stack.length > 0) stack.pop();
+  }
+  const unresolved = stack.length;
+  const unresolvedHard = stack.filter((t) => t === 'hard').length;
+  const unresolvedSoft = unresolved - unresolvedHard;
+  const blockers = [];
+  if (unresolvedHard > 0) blockers.push(`${unresolvedHard} 个 verify 阻挡项（❌）未解决`);
+  if (unresolvedSoft > 0) blockers.push(`${unresolvedSoft} 个 verify 警告（⚠️）未解决`);
+  return { pass: unresolved === 0, exists: true, unresolved_count: unresolved, blockers };
 }
 
 // ---- check-close-ready ----
@@ -564,6 +590,9 @@ function main() {
       break;
     case 'check-amend-count':
       result = checkAmendCount(cwd, changeName);
+      break;
+    case 'check-verify-issues':
+      result = checkVerifyIssues(cwd, changeName);
       break;
     default:
       process.stderr.write(`Unknown subcommand: ${subcommand}\n`);
