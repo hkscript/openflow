@@ -39,6 +39,7 @@ node <base>/.claude/hooks/openflow-gate.mjs check-brainstorming
 3. 检查现有测试：测试目录结构、测试框架、现有测试覆盖情况
 4. 检查 git 历史：最近的相关提交，了解模块最近的变更
 5. 检索沉淀经验：grep 存档中的 lessons.md 和 design.md
+6. **追踪改动点生产链路**：若需求涉及查询/进页粒度、批量、状态、数据流变化，先沿链路追踪改动点影响面（上游调用方、下游消费方、链路末端存储/提交状态）——方案取舍前就要知道改动点会碰什么，避免设计遗漏
 
 ### 2. 调用 Superpowers brainstorming（核心探索）
 

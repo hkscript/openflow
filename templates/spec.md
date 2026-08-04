@@ -46,8 +46,16 @@ description: Call OpenSpec to generate specs + translate to plan-ready.md, auto-
    openspec list --specs 2>/dev/null | grep -i "<关键词>"
    ```
    如果找到相关的 lessons.md，重点关注"设计决策"表中的 ❌ 决策和"踩过的坑"——不要在新的设计里重蹈覆辙。如果找到相关的 design.md，关注它的架构选型理由——你的设计应该和它保持一致或明确说明为什么不同。
+5. **现状与影响面调查（必做）**：列出本方案的**改动点**（入口/处理/副作用），对每个改动点沿**生产链路**逐跳追踪：
+   - **上游/调用方**：谁调用它、传什么（`grep` 调用方或 trace_path inbound）
+   - **下游/消费方**：结果流向哪里、谁消费（trace_path outbound / data_flow / cross_service，含跨服务/跨仓库）
+   - **链路末端**：存储键/提交状态/通知/下游服务的**粒度与状态隔离性**——重点核对链路末端与改动点粒度是否一致（例如进页从整批改单任务，链路末端的 localStorage key 粒度是否跟着改）
+   - **10 类 checklist 逐类排查**：查询/数据加载粒度、本地状态/缓存键、状态隔离/并发、数据流/副作用、接口契约、数据结构/存储格式、依赖/调用方、性能/资源、错误/边界处理、兼容/迁移
+   - 结果写入 design.md 的「现状与影响面」章节，每条带 `[Verified]` 证据
 
 做完以上检查后再进入第 3 步生成 OpenSpec 文件。
+
+**design.md 必填章节**：生成 design.md 时**必须**包含 `## 现状与影响面` 章节（改动点、生产链路影响表、10 类分类排查表）。缺失即视为设计未完成，close 闸门（check-design-consistency）会阻塞。
 
 **确定性检查（必做，进入步骤 3 之前）：** 汇总所有 `[Assumption]` 和 `[Unknown]` 标签的条目，逐条消解或标记。对于 design.md 中将引用的任何文件路径/模块名/函数名，必须确认其存在（未读不用铁律）。
 
