@@ -21,9 +21,10 @@ verify 已经通过，这一步只做三件事：提取经验 → 同步 tasks.m
 
 - `/openflow verify` 已通过（测试全绿、覆盖率 100%、设计一致）
 - `plan-ready.md` 和 `test-plan.md` 存在
+- `check-close-ready` 通过：verify-issues.md 无未解决项、design.md 文件表与实现一致
 
 不满足时提示：
-> "请先完成 /openflow verify 验证。"
+> "请先完成 /openflow verify 验证（check-close-ready 会实测 verify-issues 与 design 一致性）。"
 
 ## 执行要求
 

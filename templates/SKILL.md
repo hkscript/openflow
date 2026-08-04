@@ -185,7 +185,7 @@ node <base>/.claude/hooks/openflow-detect.mjs
 | superpowers_plan | `docs/superpowers/plans/` | medium | 可能残留旧文件 |
 | file_resolvability | plan-ready 中改动文件可找到 | low | 多仓库或路径写错会误判 |
 | building_marker | `.openflow/building` | high | build 阶段标记 |
-| verify_issues | verify-issues.md | medium | verify 阶段产物 |
+| verify_issues | verify-issues.md | medium | verify 阶段产物；unresolved_count 未解决项计数 |
 | lessons | lessons.md | low | close 阶段产物 |
 
 **读取输出的 JSON。如果 `contradictions` 非空，说明不同信号源给出相反结论——禁止基于单点否定跳到结论，必须展示信号矩阵并用 AskUserQuestion 让用户确认。如果无矛盾，按 `suggested_phase` 路由。**
@@ -205,6 +205,7 @@ node <base>/.claude/hooks/openflow-detect.mjs
 - 实现进行中（部分测试 PASS） → 继续 build 阶段（断点恢复）
 - 实现已完成（所有测试 PASS） → verify 阶段
 - verify 已通过 → close 阶段
+- **test-plan 全 PASS 但 verify-issues.md 仍有未解决项 → 建议「重跑 verify」而非 close**（记录陈旧）
 
 ### 手动状态检测（脚本不可用时的降级方案）
 
