@@ -651,6 +651,10 @@ Expected：`"suggestion_reason": "verify_issues_unresolved"`。
 
 - [ ] **Step 5: 无改动，无需 commit**
 
+**Task 7 附注（验证时发现的既有 bug 及修复）：**
+
+`detect.mjs collectFileResolvability` 在解析 plan-ready 真实格式 `- 改动文件：src/base.py [Verified]` 时会把 `[Verified]` 后缀吞进路径 → 找不到文件 → 触发「否定低可信信号 + ≥2 肯定信号」矛盾 → 路由被 `signal_contradiction` 遮蔽，Task 4 的 `verify_issues_unresolved` 在真实格式下不生效。已修复：提取路径时剥掉 `[Verified]`/`[Inferred]`/`[Assumption...]` 后缀（与 gate 的提取规则对齐）。这是 pre-existing bug，因与本次路由改进直接冲突而顺手修掉。
+
 ---
 
 ## Self-Review

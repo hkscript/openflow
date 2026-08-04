@@ -173,9 +173,11 @@ function collectFileResolvability(cwd, changeDir) {
   for (const m of content.matchAll(pathRe)) {
     const entries = m[1].split(/[,，、]/).map(s => s.trim()).filter(Boolean);
     for (const entry of entries) {
-      // Extract backtick-quoted path or unquoted path-like string
+      // Extract backtick-quoted path or unquoted path-like string.
+      // Strip trailing certainty tags (spec.md 格式：`路径 [Verified]` / `[Assumption: 需确认路径]`),
+      // 否则 `src/base.py [Verified]` 会被当作字面路径，导致解析失败并触发矛盾遮蔽路由。
       const btMatch = entry.match(/`([^`]+)`/);
-      const raw = btMatch ? btMatch[1] : entry;
+      const raw = (btMatch ? btMatch[1] : entry).replace(/\s*\[(?:Verified|Inferred|Assumption[^\]]*)\]\s*$/i, '').trim();
       // Filter to likely file paths (containing / or .extension)
       if (raw.includes('/') || /\.[a-z]{2,6}$/i.test(raw)) {
         filePaths.push(raw);
