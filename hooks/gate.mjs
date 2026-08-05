@@ -519,6 +519,21 @@ function checkTestFramework(cwd) {
       if (c.includes('test:')) return { framework: 'make', cmd: 'make test' };
       return null;
     }},
+    { file: 'pom.xml', lang: 'java', parse: (c) => {
+      if (c.includes('<artifactId>junit-jupiter') || c.includes('<artifactId>junit') || c.includes('<artifactId>mockito'))
+        return { framework: 'junit', cmd: 'mvn test' };
+      return null;
+    }},
+    { file: 'build.gradle', lang: 'java', parse: (c) => {
+      if (c.includes('junit') || c.includes('mockito') || c.includes('useJUnitPlatform'))
+        return { framework: 'junit', cmd: './gradlew test' };
+      return null;
+    }},
+    { file: 'build.gradle.kts', lang: 'kotlin', parse: (c) => {
+      if (c.includes('junit') || c.includes('mockito') || c.includes('useJUnitPlatform'))
+        return { framework: 'junit', cmd: './gradlew test' };
+      return null;
+    }},
   ];
 
   for (const { file, lang, parse } of configs) {
@@ -528,7 +543,7 @@ function checkTestFramework(cwd) {
     if (result) {
       // Detect test directory
       let testDir = null;
-      const candidates = ['tests', '__tests__', 'test', 'spec', 'e2e'];
+      const candidates = ['tests', '__tests__', 'test', 'spec', 'e2e', 'src/test'];
       for (const d of candidates) {
         if (exists(path.join(cwd, d))) { testDir = d; break; }
       }
@@ -549,7 +564,7 @@ function checkTestFramework(cwd) {
     framework: null,
     test_command: null,
     test_dir: null,
-    hint: 'No test framework detected. Check package.json, pyproject.toml, go.mod, Cargo.toml, or Makefile.',
+    hint: 'No test framework detected. Check package.json, pyproject.toml, go.mod, Cargo.toml, Makefile, pom.xml, or build.gradle.',
   };
 }
 
