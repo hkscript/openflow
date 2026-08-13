@@ -55,7 +55,9 @@ description: Call OpenSpec to generate specs + translate to plan-ready.md, auto-
 
 做完以上检查后再进入第 3 步生成 OpenSpec 文件。
 
-**design.md 必填章节**：生成 design.md 时**必须**包含 `## 现状与影响面` 章节（改动点、生产链路影响表、10 类分类排查表）。缺失即视为设计未完成，close 闸门（check-design-consistency）会阻塞。
+**design.md 必填章节**：生成 design.md 时**必须**包含：
+- `## 现状与影响面` 章节（改动点、生产链路影响表、10 类分类排查表）——缺失即视为设计未完成，close 闸门（check-design-consistency）会阻塞；
+- `## 改动文件` 章节：列出本变更**实际改动**的文件路径（完整路径，带 `[Verified]` 证据）。**不要把现状影响面里 `[Verified]` 标注的既有代码引用写进这一节**——gate 只从「改动文件」节提取做一致性对账，现状影响面里的引用若混入会被误当改动文件。跨仓库路径照常列出（gate 会跳过跨仓库断言，但保留在文档里供人工核对）。
 
 **确定性检查（必做，进入步骤 3 之前）：** 汇总所有 `[Assumption]` 和 `[Unknown]` 标签的条目，逐条消解或标记。对于 design.md 中将引用的任何文件路径/模块名/函数名，必须确认其存在（未读不用铁律）。
 

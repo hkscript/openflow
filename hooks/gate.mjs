@@ -15,11 +15,14 @@
  *   check-build-done      — build completion
  *   check-close-ready     — close pre-conditions
  *   check-verify-issues   — verify-issues.md 未解决项检查
- *   check-design-consistency — design.md 文件表/现状影响面 vs plan-ready + git
+ *   check-design-consistency — design.md「改动文件」节 vs plan-ready + git（basename 兜底、跨仓库跳过）
  *   check-amend-count     — amendment tracking
  *   check-writing-plans   — writing-plans availability
  *   check-brainstorming   — brainstorming availability
  *   check-test-framework  — detect language + test framework + command
+ *
+ * Project config (.openflow/gate.config.json, optional):
+ *   { "required_sections": ["现状与影响面"] }   — 覆盖 design.md 必填章节
  *
  * Zero dependencies, pure Node 20+.
  */
@@ -145,8 +148,9 @@ function checkTestPlan(cwd, changeName) {
   // Firewall: check actual test files for TODO stubs
   const stubIssues = [];
   for (const tf of testFiles) {
+    if (isCrossRepoPath(cwd, tf)) continue; // 跨仓库测试文件无法在本工作区解析 → 宁漏勿误，跳过
     const testContent = safeRead(path.join(cwd, tf));
-    if (!testContent) {
+    if (testContent === null) {
       stubIssues.push({ type: 'missing_file', file: tf, detail: `test-plan references ${tf} but file not found` });
       continue;
     }
@@ -302,6 +306,50 @@ function checkVerifyIssues(cwd, changeName) {
 const FILE_PATH_RE = /[A-Za-z0-9_@./-]+\.(?:ts|tsx|js|jsx|mjs|cjs|vue|py|go|java|rs|c|cc|cpp|h|hpp|kt|swift|sql|sh|yml|yaml|json|css|scss|html)\b/g;
 const CERTAINTY_TAG_RE = /\[(?:Verified|Inferred|Assumption)/;
 
+// basename 兜底匹配：design.md 写裸文件名、plan-ready 写全路径时也能命中（宽松，宁漏勿误）
+function pathMatches(haystack, p) {
+  const base = p.split('/').pop();
+  return haystack.some((c) => c === p || (base && c.split('/').pop() === base));
+}
+
+// 跨仓库路径：顶层目录不在当前工作区 → 无法在本仓库落盘解析（裸文件名不判跨仓库）
+function isCrossRepoPath(cwd, p) {
+  if (!p.includes('/')) return false;
+  const top = p.split('/')[0];
+  if (!top || top === '.' || top === '..') return false;
+  return !fs.existsSync(path.join(cwd, top));
+}
+
+// 测试文件改动不算设计漂移（test-plan 已引用即可，design 无需逐条列）
+function isTestFilePath(p) {
+  return /(?:^|[\/_.-])(?:test|tests|spec|__tests__|e2e)(?:[\/_.-]|$)/i.test(p)
+      || /(?:Test|Tests|Spec)\.(?:java|kt|swift|go|rs|js|ts|mjs|cjs|py|sql)$/i.test(p);
+}
+
+// 提取「## title」节内容（不含节标题，到下一个 ## 为止）；无该节返回 null
+function extractSection(content, title) {
+  const m = content.match(new RegExp(`^##\\s*${title}\\s*$`, 'm'));
+  if (!m) return null;
+  const start = m.index + m[0].length;
+  const after = content.slice(start);
+  const next = after.match(/^## /m);
+  return next ? after.slice(0, next.index) : after;
+}
+
+// 从文本收集所有文件路径（无标签过滤——用于「改动文件」这种本身就是声明的节）
+function collectPaths(text) {
+  const paths = new Set();
+  if (!text) return [];
+  for (const line of text.split('\n')) {
+    for (const m of line.matchAll(FILE_PATH_RE)) {
+      const p = m[0].replace(/^\.\//, '');
+      if (p.startsWith('openspec/') || p.endsWith('.md')) continue;
+      paths.add(p);
+    }
+  }
+  return [...paths];
+}
+
 function extractFilePaths(content) {
   const paths = new Set();
   if (!content) return [];
@@ -325,32 +373,75 @@ function gitChangedFiles(cwd) {
   }
 }
 
+// 项目级配置 .openflow/gate.config.json 可覆盖必填章节等
+function loadGateConfig(cwd) {
+  const cfgPath = path.join(cwd, '.openflow', 'gate.config.json');
+  const raw = safeRead(cfgPath);
+  if (!raw) return { required_sections: ['现状与影响面'] };
+  try {
+    const cfg = JSON.parse(raw);
+    return {
+      required_sections: Array.isArray(cfg.required_sections) ? cfg.required_sections : ['现状与影响面'],
+    };
+  } catch {
+    return { required_sections: ['现状与影响面'] };
+  }
+}
+
 function checkDesignConsistency(cwd, changeName) {
   const cd = changeDir(cwd, changeName);
   const designContent = safeRead(path.join(cd, 'design.md'));
   if (!designContent) {
-    return { pass: true, design_exists: false, design_file_count: 0, blockers: [] };
+    return { pass: true, design_exists: false, design_file_count: 0, blockers: [], warnings: [] };
   }
+  const config = loadGateConfig(cwd);
   const blockers = [];
-  if (!designContent.includes('现状与影响面')) {
-    blockers.push('design.md 缺少「现状与影响面」章节（spec 阶段必填）');
+  const warnings = [];
+
+  // 必填章节（spec 阶段约定；项目可用 .openflow/gate.config.json 覆盖）
+  for (const section of config.required_sections) {
+    if (!designContent.includes(section)) {
+      blockers.push(`design.md 缺少「${section}」章节（spec 阶段必填；可在 .openflow/gate.config.json 覆盖）`);
+    }
   }
-  const designPaths = extractFilePaths(designContent);
+
+  // 改动文件只从「## 改动文件」节提取——现状影响面里的 [Verified] 既有代码引用不再被当改动文件
+  const changeSection = extractSection(designContent, '改动文件');
+  if (changeSection === null) {
+    warnings.push('design.md 缺少「改动文件」章节，文件一致性对账已跳过（宁漏勿误）');
+    return { pass: blockers.length === 0, design_exists: true, design_file_count: 0, blockers, warnings };
+  }
+  const designPaths = collectPaths(changeSection);
+
   const planContent = safeRead(path.join(cd, 'plan-ready.md'));
   const planPaths = planContent ? extractFilePaths(planContent) : [];
+  const testPlanContent = safeRead(path.join(cd, 'test-plan.md'));
+  const testPlanPaths = testPlanContent ? collectPaths(testPlanContent) : [];
   const gitPaths = gitChangedFiles(cwd);
-  const changedSet = new Set([...planPaths, ...gitPaths]);
+
+  // design → plan/git：design 改动文件应能被 plan-ready 或未提交变更命中（basename 兜底）
+  const evidenceSet = new Set([...planPaths, ...gitPaths]);
   for (const p of designPaths) {
-    if (!changedSet.has(p)) {
-      blockers.push(`design.md 列出 ${p}，但 plan-ready 改动文件 / 未提交变更中都没有它`);
+    if (isCrossRepoPath(cwd, p)) {
+      warnings.push(`改动文件 ${p} 顶层目录不在当前工作区，跳过一致性断言（跨仓库，人工核对）`);
+      continue;
+    }
+    if (!pathMatches([...evidenceSet], p)) {
+      blockers.push(`design.md「改动文件」列出 ${p}，但 plan-ready 改动文件 / 未提交变更中都没有它`);
     }
   }
+
+  // git → design（防漂移）：只对本变更文档引用过的 git 文件报漂移——workspace 噪音与测试文件跳过
+  const referencedSet = new Set([...designPaths, ...planPaths, ...testPlanPaths]);
   for (const p of gitPaths) {
-    if (!designPaths.includes(p)) {
-      blockers.push(`未提交变更改动了 ${p}，但 design.md 现状影响面未列出`);
+    if (isTestFilePath(p)) continue;
+    if (!pathMatches([...referencedSet], p)) continue;
+    if (!pathMatches(designPaths, p)) {
+      blockers.push(`未提交变更改动了 ${p}，但 design.md「改动文件」未列出`);
     }
   }
-  return { pass: blockers.length === 0, design_exists: true, design_file_count: designPaths.length, blockers };
+
+  return { pass: blockers.length === 0, design_exists: true, design_file_count: designPaths.length, blockers, warnings };
 }
 
 // ---- check-close-ready ----
@@ -389,6 +480,7 @@ function checkCloseReady(cwd, changeName) {
       design_consistent: designConsistency.pass,
     },
     blockers,
+    warnings: designConsistency.warnings || [],
   };
 }
 
