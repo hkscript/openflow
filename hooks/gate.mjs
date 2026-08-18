@@ -611,9 +611,30 @@ function checkTestFramework(cwd) {
       if (c.includes('test:')) return { framework: 'make', cmd: 'make test' };
       return null;
     }},
-    { file: 'pom.xml', lang: 'java', parse: (c) => {
-      if (c.includes('<artifactId>junit-jupiter') || c.includes('<artifactId>junit') || c.includes('<artifactId>mockito'))
-        return { framework: 'junit', cmd: 'mvn test' };
+    { file: 'pom.xml', lang: 'java', parse: (c, cwd) => {
+      const hasTestDeps = (pom) =>
+        pom.includes('<artifactId>junit-jupiter')
+        || pom.includes('<artifactId>junit')
+        || pom.includes('<artifactId>mockito');
+      if (hasTestDeps(c)) return { framework: 'junit', cmd: 'mvn test' };
+      // Maven multi-module aggregator: test deps live in submodule poms,
+      // not the root pom (which is often <packaging>pom</packaging>).
+      const seen = new Set([cwd]);
+      let queue = [...c.matchAll(/<module>\s*([^<]+?)\s*<\/module>/g)]
+        .map((m) => path.join(cwd, m[1].trim()));
+      for (let depth = 0; depth < 6 && queue.length; depth++) {
+        const next = [];
+        for (const subDir of queue) {
+          if (seen.has(subDir)) continue;
+          seen.add(subDir);
+          const subPom = safeRead(path.join(subDir, 'pom.xml'));
+          if (!subPom) continue;
+          if (hasTestDeps(subPom)) return { framework: 'junit', cmd: 'mvn test' };
+          next.push(...[...subPom.matchAll(/<module>\s*([^<]+?)\s*<\/module>/g)]
+            .map((m) => path.join(subDir, m[1].trim())));
+        }
+        queue = next;
+      }
       return null;
     }},
     { file: 'build.gradle', lang: 'java', parse: (c) => {
@@ -631,7 +652,7 @@ function checkTestFramework(cwd) {
   for (const { file, lang, parse } of configs) {
     const content = safeRead(path.join(cwd, file));
     if (!content) continue;
-    const result = parse(content);
+    const result = parse(content, cwd);
     if (result) {
       // Detect test directory
       let testDir = null;
