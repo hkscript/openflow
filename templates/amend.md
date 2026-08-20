@@ -82,7 +82,7 @@ description: Revise requirements during build — delta to OpenSpec docs, impact
 按影响范围更新：
 
 - **proposal.md**：追加 `## Amendments`，记录日期、原因、摘要
-- **design.md**：**必须同步**——更新「现状与影响面」章节（改动点、链路影响、10 类排查）和 `## 改动文件` 节（实际改动文件，完整路径），新增/删除/修改的文件跟着改；若改动点粒度或生产链路变化，重跑链路追踪
+- **design.md**：**必须同步**——更新「现状与影响面」章节（改动点、链路影响、10 类排查）和 `## 改动文件` 节（实际改动文件，完整路径），新增/删除/修改的文件跟着改；若改动点粒度或生产链路变化，重跑链路追踪；改动点涉及并行路径（带 `New`/`Old`/`V2` 后缀的同前缀兄弟方法）时，同步复查兄弟路径是否也需随改
 - **specs/<capability>/spec.md**：使用 `ADDED`、`MODIFIED`、`REMOVED` 表达 delta。每个新增/修改的 requirement 必须至少有一个 `#### Scenario:`
 - **tasks.md**：追加新任务；保留已完成任务的 checkbox 状态
 

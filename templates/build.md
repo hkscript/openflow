@@ -115,6 +115,7 @@ node <base>/.claude/hooks/openflow-gate.mjs check-test-framework
 2. **识别全栈范围**：明确标注哪些文件是前端、哪些是后端。如果变更同时涉及前后端，记录下来——后续实现计划必须覆盖所有侧
 3. **读现有测试文件**：如果目标文件已有对应测试（如 `src/auth/login.py` → `tests/auth/test_login.py`），先读懂现有测试的模式——mock 方式、断言风格、fixture 约定
 4. **读一个类似的完整测试用例**：如果项目已有类似功能的测试，挑一个完整的当模板——测试桩的风格必须和它一致
+5. **设计行号防漂移**：design.md 若给出方法名 + 行号，先 grep 确认该行号属于哪个方法——**方法名与行号冲突时以 grep 结果为准**（design 说改 A 方法但行号落在 B 方法，说明 design 有误，退回 amend 澄清，不要照着行号插）；按行号落点后，回读 design 声称的方法名，核对插进的代码块确实属于设计说的那个方法
 
 **未读不用检查（必做，进入步骤 3 前）：**
 - plan-ready.md 中每个 task 的 `[Assumption]` 路径必须逐个 grep/Read 确认
