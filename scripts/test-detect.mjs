@@ -176,6 +176,24 @@ run('有效 build/task-build 状态 -> 路由 build（phase_state 完整）', ()
   assert.deepEqual(contradictionIds(json), []);
 });
 
+run('canonical 稳定行状态后缀 -> test_plan_stats 计数（F1）', () => {
+  const dir = tmpdir();
+  mkChange(dir, 'add-widget');
+  write(dir, 'openspec/changes/add-widget/test-plan.md', [
+    'T-001: `tests/auth/login.test.ts::valid credentials` ✅ PASS',
+    'T-002: `tests/auth/login.test.ts::wrong password` ⬜ TODO',
+    'T-003: `tests/auth/login.test.ts::reuse session` ❌ FAIL',
+  ].join('\n'));
+  const json = runDetect(dir);
+  const stats = json.signals.test_plan_stats.value;
+  assert.ok(stats, `缺少 test_plan_stats: ${JSON.stringify(json.signals.test_plan_stats)}`);
+  assert.equal(stats.pass, 1, JSON.stringify(stats));
+  assert.equal(stats.todo, 1, JSON.stringify(stats));
+  assert.equal(stats.fail, 1, JSON.stringify(stats));
+  assert.equal(stats.total, 3, JSON.stringify(stats));
+  assert.equal(stats.allPass, false);
+});
+
 console.log('\n[2] phase-first change selection');
 
 run('多个活跃变更时 phase 指定的 change 优先于 mtime', () => {

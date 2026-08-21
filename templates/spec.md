@@ -153,8 +153,9 @@ openspec validate <变更名> --strict
 2. 每个用例必须给出**确定性选择器**：`<测试文件>::<测试函数名>`（如 `tests/auth/test_login.py::test_login_with_valid_credentials`）；函数名从 scenario 标题派生（snake_case）
 3. 测试内容从 scenario 描述推导（给定条件 → test setup，期望结果 → assertion）
 4. 测试文件路径根据项目约定自动推断（见下方）
+5. 初始状态：稳定行**不带状态后缀**（= 未开始）；build 阶段逐行在行尾追加状态后缀
 
-`openspec/changes/<变更名>/test-plan.md` 格式：
+`openspec/changes/<变更名>/test-plan.md` 格式（**稳定行是唯一事实来源**，enforcement / Gate / detect 都逐行解析它；不要靠额外的表格当事实来源）：
 
 ```markdown
 # 测试计划：<变更名>
@@ -162,22 +163,35 @@ openspec validate <变更名> --strict
 ## 测试映射
 
 <!--
-  机器格式：每个用例一行 `T-00x: `<测试文件>::<测试函数名>``
-  gate/enforce 逐行解析此格式（ID 必须 T-00x；选择器必须能 grep 到真实测试函数）。
-  不要给这行加列表符号/表格管道，保持该格式原样。
+  机器格式（enforcement / Gate / detect 逐行解析，必须保持）：
+  每行 = 一个测试用例，`<ID>: `<测试文件>::<测试函数名>``
+  ID 用稳定 T-00x；选择器必须能 grep 到真实测试函数。
+  状态后缀可选的（行尾追加）：✅ PASS / ⬜ TODO / ❌ FAIL；build 逐任务更新。
+  不要给这些行加列表符号/表格管道，不要拆成多行。
 -->
 
 T-001: `tests/auth/test_login.py::test_login_with_valid_credentials`
 T-002: `tests/auth/test_login.py::test_login_with_wrong_password`
 T-003: `tests/auth/test_session.py::test_token_expiry_triggers_refresh`
+```
 
-**追溯表（人工可读，verify 场景覆盖率对账用）：**
+build 完成后示例（状态后缀在行尾，选择器不受影响）：
 
+```markdown
+T-001: `tests/auth/test_login.py::test_login_with_valid_credentials` ✅ PASS
+T-002: `tests/auth/test_login.py::test_login_with_wrong_password` ⬜ TODO
+T-003: `tests/auth/test_session.py::test_token_expiry_triggers_refresh` ❌ FAIL
+```
+
+**追溯表（可选，仅供人工阅读/verify 场景覆盖率对账，不是解析来源）：**
+
+```markdown
 | ID | 来源 Requirement | Scenario | 测试文件::测试函数 | 类型 |
 |----|-----------------|----------|-------------------|------|
 | T-001 | REQ-001: 用户登录 | 正确凭据登录成功 | `tests/auth/test_login.py::test_login_with_valid_credentials` | 功能 |
 | T-002 | REQ-001: 用户登录 | 错误密码登录失败 | `tests/auth/test_login.py::test_login_with_wrong_password` | 功能 |
 | T-003 | REQ-002: 会话管理 | Token过期自动刷新 | `tests/auth/test_session.py::test_token_expiry_triggers_refresh` | 集成 |
+```
 
 ## 统计
 

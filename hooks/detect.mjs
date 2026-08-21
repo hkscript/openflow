@@ -132,54 +132,68 @@ function collectTestPlanStats(changeDir) {
 
   let pass = 0, todo = 0, fail = 0;
 
-  // Count status markers in table rows. Common patterns:
-  // ✅ PASS / ✅ / PASS
-  // TODO / ❌ TODO / ⬜
-  // FAIL / ❌ FAIL / ❌
-  // Match a marker at the START of a table cell (`| ✅`), so we never
-  // count "pass" inside words like bypass/passed. No `g` flag: a global
-  // regex .test() keeps lastIndex across rows, silently skipping ~half
-  // of them (one match sets lastIndex to end-of-line; a shorter next
-  // line fails and resets before its marker is ever checked).
-  const passRe = /\|\s*(?:✅|PASS\b)/i;
-  const todoRe = /\|\s*(?:TODO\b|⬜|⏳)/i;
-  const failRe = /\|\s*(?:❌|FAIL\b)/i;
-
-  // Split by table rows (lines starting with | after the header)
-  const lines = content.split('\n');
-  let inTable = false;
-  for (const line of lines) {
-    // Table separator lines like |---| skip
-    if (/^\|[-| ]+\|$/.test(line.trim())) { inTable = true; continue; }
-    if (!inTable) continue;
-    if (!line.trim().startsWith('|')) { inTable = false; continue; }
-
-    // Count statuses in this row
-    if (passRe.test(line)) pass++;
-    else if (failRe.test(line)) fail++;
-    else if (todoRe.test(line)) todo++;
-  }
-
-  // If no status markers found, check for alternative patterns
-  // (like separate status column, or per-row markers)
-  if (pass === 0 && todo === 0 && fail === 0) {
-    // Try counting row-by-row status columns
-    for (const line of lines) {
-      if (!line.trim().startsWith('|')) continue;
-      if (/^\|[-| ]+\|$/.test(line.trim())) continue;
-      // Assume last or second-to-last column has status
-      const cells = line.split('|').map(c => c.trim()).filter(Boolean);
-      // Skip header
-      if (cells[0] === '#' || cells[0] === '测试编号') continue;
-
-      // If no explicit status marker, count rows as "unmarked"
-      // This is a heuristic — assume unmarked = not started = todo
+  // Canonical stable-row grammar (Task 7): `T-001: \`file::selector\`` with an
+  // optional status suffix (`✅ PASS` / `⬜ TODO` / `❌ FAIL`). This is the
+  // primary grammar emitted by the spec template. The legacy table grammar is
+  // still counted as a fallback for pre-existing test-plans.
+  const rows = parseCanonicalTestRows(content);
+  if (rows.length > 0) {
+    for (const r of rows) {
+      if (r.status === 'pass') pass++;
+      else if (r.status === 'fail') fail++;
+      else todo++;
     }
-    // If still nothing, count all data rows as potential tests
+  } else {
+    // Legacy table rows (`| T-001 | … | ✅ PASS |`). Match a marker at the START
+    // of a table cell (`| ✅`), so we never count "pass" inside words like
+    // bypass/passed. No `g` flag: a global regex .test() keeps lastIndex across
+    // rows, silently skipping ~half of them (one match sets lastIndex to
+    // end-of-line; a shorter next line fails and resets before its marker is
+    // ever checked).
+    const passRe = /\|\s*(?:✅|PASS\b)/i;
+    const todoRe = /\|\s*(?:TODO\b|⬜|⏳)/i;
+    const failRe = /\|\s*(?:❌|FAIL\b)/i;
+    const lines = content.split('\n');
+    let inTable = false;
+    for (const line of lines) {
+      if (/^\|[-| ]+\|$/.test(line.trim())) { inTable = true; continue; }
+      if (!inTable) continue;
+      if (!line.trim().startsWith('|')) { inTable = false; continue; }
+
+      if (passRe.test(line)) pass++;
+      else if (failRe.test(line)) fail++;
+      else if (todoRe.test(line)) todo++;
+    }
   }
 
   const total = pass + todo + fail;
   return { pass, todo, fail, total, allPass: total > 0 && todo === 0 && fail === 0 };
+}
+
+/**
+ * Parse canonical test-plan stable rows: `T-001: \`file::selector\`` optionally
+ * followed by a status suffix (`✅ PASS` / `⬜ TODO` / `❌ FAIL`). Shares the same
+ * grammar as enforcement (rules.ts / enforce.mjs / opencode.ts) and gate.mjs.
+ * Returns [{id, file, selector, status}]; empty array when no stable rows.
+ */
+function parseCanonicalTestRows(content) {
+  const out = [];
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const m = trimmed.match(/^([T#]\S+)\s*:\s*`([^`]+)`(?:\s+(.+))?$/);
+    if (!m) continue;
+    const id = m[1];
+    const selector = m[2].trim();
+    const sep = selector.lastIndexOf('::');
+    const file = sep === -1 ? selector : selector.slice(0, sep);
+    const suffix = m[3] || '';
+    let status = 'todo';
+    if (/FAIL|❌/.test(suffix)) status = 'fail';
+    else if (/PASS|✅/.test(suffix)) status = 'pass';
+    out.push({ id, file, selector, status });
+  }
+  return out;
 }
 
 /**

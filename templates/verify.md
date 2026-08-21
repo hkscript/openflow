@@ -118,15 +118,17 @@ cargo test        # Rust
 
 闸门全部通过、**改动点确认清单已展示给用户并获显式确认**后，把验证结果写入 receipt（`verify-result.json`）：
 
-1. 把验证结果整理成 receipt 输入 JSON（如 `<receipt-input>.json`），字段与 gate 校验严格对应：
+1. 把验证结果**直接写入 `openspec/changes/<变更名>/verify-result.json`**——这是 verify 阶段的允许写入路径（见阶段写入边界），也是指纹的自污染排除路径（receipt 前的写入不会让指纹变 stale），字段与 gate 校验严格对应：
 
-   ```json
+   ```bash
+   cat > openspec/changes/<变更名>/verify-result.json <<'EOF'
    {
      "testRuns": [{ "name": "full-suite", "exitCode": 0 }],
      "scenarioCoverage": { "mapped": 3, "total": 3 },
      "designConsistency": { "pass": true, "blockers": [] },
      "userConfirmation": { "received": true }
    }
+   EOF
    ```
 
    规则：
@@ -135,13 +137,13 @@ cargo test        # Rust
    - `designConsistency`：`blockers` 必须为空
    - `userConfirmation`：`received` 必须为 true——**用户显式确认改动点清单后**才填，AI 不能自填
 
-2. 运行已安装客户端的 `write-verify-receipt` 子命令（路径推导：把 SKILL.md 路径中的 `skills/openflow/SKILL.md` 替换为 `hooks/openflow-gate.mjs`，无本地 hook 时用已安装 openflow 的全局 helpers）：
+2. 运行已安装客户端的 `write-verify-receipt` 子命令（路径推导：把 SKILL.md 路径中的 `skills/openflow/SKILL.md` 替换为 `hooks/openflow-gate.mjs`，无本地 hook 时用已安装 openflow 的全局 helpers），**input 路径就是上面的 `verify-result.json`**：
 
    ```bash
-   node <base>/.claude/hooks/openflow-gate.mjs write-verify-receipt <变更名> <receipt-input>.json
+   node <base>/.claude/hooks/openflow-gate.mjs write-verify-receipt <变更名> openspec/changes/<变更名>/verify-result.json
    ```
 
-   gate 会：先复核 verify 前置条件（含 building 标记残留检查）→ 收集最终工作区指纹 → 原子写入 `openspec/changes/<变更名>/verify-result.json`。输出 JSON 的 `pass` 指示是否成功。
+   gate 会：读取该 JSON 校验四个字段 → 复核 verify 前置条件（含 building 标记残留检查）→ 收集最终工作区指纹 → **原子替换**同一 `verify-result.json` 路径。输出 JSON 的 `pass` 指示是否成功。
 
 3. **只有 `pass: true` 才切换阶段为 close**：
 

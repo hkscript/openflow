@@ -371,6 +371,22 @@ console.log('\n[4] resolveCurrentTask 选择器解析');
       id: 'T-001', file: 'src/component.test.ts', selector: 'src/component.test.ts::adds widget',
     }]);
   });
+  run('F2 状态后缀不破坏 T-001 选择器解析（canonical status-bearing 行）', () => {
+    // review F2: build 状态更新在稳定行行尾追加 `✅ PASS` / `⬜ TODO`，选择器映射必须不受影响。
+    const dir2 = makeSelectorWorkspace();
+    write(dir2, 'openspec/changes/add-widget/test-plan.md', [
+      'T-001: `src/component.test.ts::adds widget` ✅ PASS',
+      'T-002: `src/component.test.ts::removes widget` ⬜ TODO',
+    ].join('\n'));
+    writePhase(dir2, { version: 1, change: 'add-widget', phase: 'build', mode: 'task-build', task: '1' });
+    const st = rules.readPhaseState(dir2).state;
+    const r = rules.resolveCurrentTask(dir2, st);
+    assert.equal(r.error, null);
+    assert.deepEqual(r.task.testIds, ['T-001']);
+    assert.deepEqual(r.task.selectors, [{
+      id: 'T-001', file: 'src/component.test.ts', selector: 'src/component.test.ts::adds widget',
+    }]);
+  });
   run('task 2 唯一 legacy #2 解析', () => {
     const st = { ...state, task: '2' };
     const r = rules.resolveCurrentTask(dir, st);

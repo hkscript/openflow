@@ -161,8 +161,13 @@ printf '%s\n' '{"version":1,"change":"<变更名>","phase":"build","mode":"task-
 - `.openflow/building` 是生命周期上下文标记，仅 build 阶段创建；amend 可保留它（build 续接）；`archive-verified` 通过后才清理
 - 非 build 阶段**不允许携带 `mode`/`task`**；build 必须有 `mode`；`task-build` 必须有数字 `task`
 - phase 指向缺失或已归档的 change 时视为无效，除修复 `.openflow/phase` 外禁止写入
-- 测试计划每行给出稳定 ID `T-001` 与确定性选择器（如 `tests/auth/test_login.py::test_login_with_valid_credentials`）；plan-ready 任务绑定同一稳定 ID（`Test cases: T-001`）
+- 测试计划每行给出稳定 ID `T-001` 与确定性选择器（`tests/auth/test_login.py::test_login_with_valid_credentials`）；plan-ready 任务绑定同一稳定 ID（`Test cases: T-001`）
+- **test-plan 稳定行是可选的带状态语法**：`T-001: \`<测试文件>::<测试函数>\``（可加后缀 `✅ PASS` / `⬜ TODO` / `❌ FAIL`）。enforcement / Gate / detect 都解析同一语法；build 更新状态只在行尾追加后缀，不改选择器
 - 迁移期旧的唯一 `#N` 引用可临时使用，但下次 spec/amend 编辑时必须转为稳定 ID；混合 / 重复 / 歧义引用会 fail-closed 报错
+
+## 客户端支持（生命周期运行时）
+
+enforcement / gate / detect / receipt / archive 的**生命周期运行时**由 **Claude Code** 与 **OpenCode** 安装（hooks 目录随客户端安装自动生成）。**codex / cursor 只安装 skills**——不安装 hooks/plugin 运行时，其 openflow 流程是**提示词级指导**：gate/detect 脚本不可用，阶段写入边界、receipt、`archive-verified` 均不强制执行，相关命令退回手动检查。若本地没有 gate/detect 脚本（codex/cursor，或旧版未升级），跳过相关命令，按各阶段模板的「手动检查」降级执行。
 
 ## 子命令路由（必须读取对应参考文件）
 

@@ -451,21 +451,34 @@ function readTemplate(rel) {
   return fs.readFileSync(p, 'utf8');
 }
 
-// Mirrors src/core/skill-generator.ts `replaceToolPaths` so we can assert the
-// client-correct rendered templates (Task 6 installed-artifact paths).
+// Mirrors src/core/skill-generator.ts `replaceToolPaths`. Since Task 7 (review
+// F3), the hook-path rewrite is gated on lifecycle-runtime support: Claude and
+// OpenCode render their real hooks dir; codex/cursor render an explicit
+// unsupported marker instead of a phantom `.codex/hooks/…` executable path.
 function renderForTool(tool) {
   const CFG = {
-    claude: { skillsDir: '.claude/skills', configDir: '.claude' },
-    codex: { skillsDir: '.codex/skills', configDir: '.codex' },
-    cursor: { skillsDir: '.cursor/skills', configDir: '.cursor' },
-    opencode: { skillsDir: '.opencode/skills', configDir: '.opencode' },
+    claude: { skillsDir: '.claude/skills', configDir: '.claude', hookRuntime: true },
+    codex: { skillsDir: '.codex/skills', configDir: '.codex', hookRuntime: false },
+    cursor: { skillsDir: '.cursor/skills', configDir: '.cursor', hookRuntime: false },
+    opencode: { skillsDir: '.opencode/skills', configDir: '.opencode', hookRuntime: true },
   };
-  const { skillsDir, configDir } = CFG[tool];
-  return (content) => content
-    .replace(/\.claude\/skills\/openflow\//g, `${skillsDir}/openflow/`)
-    .replace(/~\/\.claude\/skills\/openflow\//g, `~/${skillsDir}/openflow/`)
-    .replace(/\.claude\/hooks\//g, `${configDir}/hooks/`)
-    .replace(/~\/\.claude\/hooks\//g, `~/${configDir}/hooks/`);
+  const { skillsDir, configDir, hookRuntime } = CFG[tool];
+  const HOOK_MISSING_MARKER = 'hooks/（⚠️ 本客户端未安装 lifecycle 运行时：codex/cursor 仅安装 skills）';
+  return (content) => {
+    let c = content
+      .replace(/\.claude\/skills\/openflow\//g, `${skillsDir}/openflow/`)
+      .replace(/~\/\.claude\/skills\/openflow\//g, `~/${skillsDir}/openflow/`);
+    if (hookRuntime) {
+      c = c
+        .replace(/\.claude\/hooks\//g, `${configDir}/hooks/`)
+        .replace(/~\/\.claude\/hooks\//g, `~/${configDir}/hooks/`);
+    } else {
+      c = c
+        .replace(/\.claude\/hooks\//g, HOOK_MISSING_MARKER)
+        .replace(/~\/\.claude\/hooks\//g, HOOK_MISSING_MARKER);
+    }
+    return c;
+  };
 }
 
 // Templates that must invoke the installed gate helper (they run gate subcommands).
@@ -506,10 +519,25 @@ await run('渲染到 Claude：gate/detect 指向 .claude/hooks 已安装路径',
   assert.ok(render(readTemplate('SKILL.md')).includes('.claude/hooks/openflow-detect.mjs'), 'SKILL.md 渲染后无 claude detect 路径');
 });
 
-await run('spec.md 生成 T-001 稳定 ID + file::selector 选择器，plan-ready 绑定稳定 ID', () => {
+await run('渲染到 Codex/Cursor：无幻影 hooks 路径，显式标注 lifecycle 运行时不可用（F3）', () => {
+  for (const tool of ['codex', 'cursor']) {
+    const render = renderForTool(tool);
+    for (const rel of [...MAIN_TEMPLATES, ...SHORTCUT_TEMPLATES]) {
+      const rendered = render(readTemplate(rel));
+      assert.ok(!rendered.includes(`.${tool}/hooks/openflow-gate.mjs`), `${rel} 渲染后仍引用幻影 .${tool}/hooks gate 路径`);
+      assert.ok(!rendered.includes(`.${tool}/hooks/openflow-detect.mjs`), `${rel} 渲染后仍引用幻影 .${tool}/hooks detect 路径`);
+      if (GATE_TEMPLATES.has(rel) || rel === 'SKILL.md') {
+        assert.ok(rendered.includes('未安装 lifecycle 运行时'), `${rel} 渲染后无显式不可用标注`);
+      }
+    }
+  }
+});
+
+await run('spec.md 生成 T-001 稳定 ID + 状态后缀语法，plan-ready 绑定稳定 ID', () => {
   const c = readTemplate('spec.md');
   assert.match(c, /T-\d{3}/, '缺少 T-001 稳定 ID 示例');
   assert.ok(c.includes('::'), '缺少 file::selector 选择器格式');
+  assert.match(c, /✅ PASS/, '缺少状态后缀语法文档');
   assert.match(c, /Test cases?\s*:\s*T-\d{3}/i, 'plan-ready 任务未绑定稳定 ID（Test cases: T-001）');
 });
 
@@ -522,9 +550,19 @@ await run('build.md 先写 bootstrap 再写 task-build，结尾指向 /openflow 
   assert.ok(!c.includes('/openflow close'), 'build 错误指向 /openflow close');
 });
 
-await run('verify.md 运行 write-verify-receipt 且成功后才设 phase=close', () => {
+await run('build.md 完成时先设 phase=verify 再移除 building 标记（F5）', () => {
+  const c = readTemplate('build.md');
+  const verifyIdx = c.indexOf('"phase":"verify"');
+  const rmIdx = c.indexOf('rm -f .openflow/building');
+  assert.ok(verifyIdx >= 0 && rmIdx >= 0, 'build 完成缺少 phase=verify 与 marker 移除');
+  assert.ok(verifyIdx < rmIdx, 'phase=verify 应在移除 marker 之前（避免 task-build 无 marker 矛盾窗口）');
+});
+
+await run('verify.md 将 receipt 输入写入精确 verify-result.json 路径（F4）', () => {
   const c = readTemplate('verify.md');
   assert.ok(c.includes('write-verify-receipt'), '缺少 write-verify-receipt 指令');
+  assert.ok(c.includes('openspec/changes/<变更名>/verify-result.json'), '未引用精确 verify-result.json 路径');
+  assert.ok(!c.includes('<receipt-input>'), '仍建议任意 workspace 输入文件');
   assert.match(c, /userConfirmation/, '缺少用户确认输入字段');
   assert.match(c, /scenarioCoverage/, '缺少场景覆盖输入字段');
   assert.match(c, /"phase"\s*:\s*"close"/, '成功后才设 phase close');
@@ -534,6 +572,185 @@ await run('close.md 只用 archive-verified，禁止原始 openspec archive 命�
   const c = readTemplate('close.md');
   assert.ok(c.includes('archive-verified'), '缺少 archive-verified 指令');
   assert.ok(!/^\s*openspec archive\s/m.test(c), 'close 包含原始 openspec archive 命令');
+});
+
+// ===========================================================================
+// [6] 端到端集成（review F1/F2/F4/F5：canonical 语法跨 enforcement/Gate/detect）
+// ===========================================================================
+console.log('\n[6] 端到端集成（canonical test-plan 语法跨 enforcement/Gate/detect）');
+
+// spec.md 模板生成的 canonical plan/test-plan（稳定行 + 状态后缀）。
+const CANONICAL_TP = [
+  'T-001: `tests/auth/test_login.py::test_login_with_valid_credentials` ✅ PASS',
+  'T-002: `tests/auth/test_login.py::test_login_with_wrong_password` ✅ PASS',
+].join('\n');
+const CANONICAL_TP_TODO = CANONICAL_TP.replace(
+  'T-002: `tests/auth/test_login.py::test_login_with_wrong_password` ✅ PASS',
+  'T-002: `tests/auth/test_login.py::test_login_with_wrong_password` ⬜ TODO'
+);
+
+const CANONICAL_PR = [
+  '# 实现计划：add-widget',
+  '## 来源',
+  '- 测试计划：openspec/changes/add-widget/test-plan.md',
+  '',
+  '### Task 1: login',
+  '- Test cases: T-001, T-002',
+  '- Files: `src/auth/login.py`, `tests/auth/test_login.py`',
+  '- 改动文件：`src/auth/login.py` [Verified]',
+  '- [x] 实现登录',
+  '- [x] 补测试',
+  '',
+].join('\n');
+
+function writeCanonicalChange(proj, change = 'add-widget') {
+  const base = `openspec/changes/${change}`;
+  write(proj, `${base}/test-plan.md`, CANONICAL_TP);
+  write(proj, `${base}/plan-ready.md`, CANONICAL_PR);
+  write(proj, `${base}/proposal.md`, '## Why\n\nNeeds login for operators.\n\n## What Changes\n\n- add login\n');
+  write(proj, `${base}/design.md`, '## 现状与影响面\n\n- 改动点 `login`\n\n## 改动文件\n\n- src/auth/login.py\n');
+  write(proj, 'tests/auth/test_login.py', 'def test_login_with_valid_credentials():\n    assert True\n\ndef test_login_with_wrong_password():\n    assert True\n');
+  write(proj, 'src/auth/login.py', 'def login(u, p):\n    return True\n');
+}
+
+function runInstalledGate(proj, args) {
+  const gate = path.join(proj, '.claude', 'hooks', 'openflow-gate.mjs');
+  return spawnSync(process.execPath, [gate, ...args], {
+    cwd: proj,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, OPENFLOW_OPENSPEC_BIN: path.join(fakeOpenspecBin(), 'openspec') },
+  });
+}
+
+await run('canonical plan/test-plan → 已安装 Gate check-build-done 通过（F1）', () => {
+  const { proj } = makeRuntimeFixture();
+  writeCanonicalChange(proj);
+  const res = runInstalledGate(proj, ['check-build-done', 'add-widget']);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.pass, true, JSON.stringify(out));
+  assert.equal(out.all_tests_pass, true);
+});
+
+await run('canonical plan/test-plan → 已安装 Gate check-cross-ref 用 T-001 对账（F1）', () => {
+  const { proj } = makeRuntimeFixture();
+  writeCanonicalChange(proj);
+  const res = runInstalledGate(proj, ['check-cross-ref', 'add-widget']);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.pass, true, JSON.stringify(out));
+});
+
+await run('canonical plan/test-plan → 已安装 Gate check-verify-prerequisites 通过（F1）', () => {
+  const { proj } = makeRuntimeFixture();
+  writeCanonicalChange(proj);
+  const res = runInstalledGate(proj, ['check-verify-prerequisites', 'add-widget']);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.pass, true, JSON.stringify(out.blockers));
+});
+
+await run('canonical plan/test-plan → 已安装 detect 统计 PASS/TODO（F1）', () => {
+  const { proj } = makeRuntimeFixture();
+  writeCanonicalChange(proj);
+  // 一行 TODO，一行 PASS
+  write(proj, 'openspec/changes/add-widget/test-plan.md', CANONICAL_TP_TODO);
+  const detect = path.join(proj, '.claude', 'hooks', 'openflow-detect.mjs');
+  const res = spawnSync(process.execPath, [detect], {
+    cwd: proj, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  assert.equal(res.status, 0, res.stderr);
+  const json = JSON.parse(res.stdout);
+  const stats = json.signals && json.signals.test_plan_stats && json.signals.test_plan_stats.value;
+  assert.ok(stats, `缺少 test_plan_stats: ${JSON.stringify(json.signals && json.signals.test_plan_stats)}`);
+  assert.equal(stats.pass, 1, JSON.stringify(stats));
+  assert.equal(stats.todo, 1, JSON.stringify(stats));
+  assert.equal(stats.fail, 0, JSON.stringify(stats));
+  assert.equal(stats.total, 2, JSON.stringify(stats));
+});
+
+await run('canonical 状态后缀行 → 已安装 enforce 当前任务选择器解析（F2）', () => {
+  const { proj } = makeRuntimeFixture();
+  // 与 spec.md 模板一致的 status-bearing 稳定行（选择器是 jest 风格 test() 声明，
+  // 与 enforcement 的 selector-region 识别一致）。行尾 ✅ PASS 后缀不得破坏解析。
+  const base = 'openspec/changes/add-widget';
+  write(proj, `${base}/test-plan.md`, [
+    'T-001: `tests/auth/login.test.ts::valid credentials` ✅ PASS',
+    'T-002: `tests/auth/login.test.ts::wrong password` ⬜ TODO',
+  ].join('\n'));
+  write(proj, `${base}/plan-ready.md`, [
+    '### Task 1: login',
+    '- Test cases: T-001, T-002',
+    '- Files: `src/auth/login.ts`, `tests/auth/login.test.ts`',
+    '- [x] 实现登录',
+    '',
+  ].join('\n'));
+  write(proj, 'tests/auth/login.test.ts', [
+    "test('valid credentials', () => {",
+    '  expect(login()).toBe(true);',
+    '});',
+    '',
+    "test('wrong password', () => {",
+    '  expect(login()).toBe(false);',
+    '});',
+  ].join('\n'));
+  write(proj, 'src/auth/login.ts', 'export function login(): boolean { return true; }\n');
+  write(proj, '.openflow/phase', JSON.stringify({ version: 1, change: 'add-widget', phase: 'build', mode: 'task-build', task: '1' }));
+  write(proj, '.openflow/building', 'add-widget');
+  const hook = path.join(proj, '.claude', 'hooks', 'openflow-enforce.mjs');
+  // 写 task 声明的实现文件 → 不阻断（证明状态后缀行被正确解析为选择器映射）
+  const okRes = spawnSync(process.execPath, [hook], {
+    cwd: proj,
+    input: JSON.stringify({ tool_name: 'Write', file_path: 'src/auth/login.ts', content: 'export function login(): boolean { return true; }\n' }),
+    encoding: 'utf8',
+  });
+  assert.equal(okRes.status, 0, `declared write blocked: ${okRes.stdout}`);
+  // 写未声明文件 → phase-boundary 阻断
+  const badRes = spawnSync(process.execPath, [hook], {
+    cwd: proj,
+    input: JSON.stringify({ tool_name: 'Write', file_path: 'src/auth/undeclared.ts', content: 'x' }),
+    encoding: 'utf8',
+  });
+  assert.equal(badRes.status, 1, 'undeclared write not blocked');
+  assert.ok(/phase-boundary/.test(badRes.stdout), `stdout=${badRes.stdout}`);
+});
+
+await run('verify 在 verify-result.json 精确路径写 receipt 输入 → gate 原子替换（F4）', () => {
+  const { proj } = makeRuntimeFixture();
+  writeCanonicalChange(proj);
+  // 直接把 receipt 输入写到 verify-result.json（verify 允许写入 + 指纹自污染排除）
+  const receiptInput = path.join(proj, 'openspec/changes/add-widget/verify-result.json');
+  write(proj, 'openspec/changes/add-widget/verify-result.json', JSON.stringify({
+    testRuns: [{ name: 'full-suite', exitCode: 0 }],
+    scenarioCoverage: { mapped: 2, total: 2 },
+    designConsistency: { pass: true, blockers: [] },
+    userConfirmation: { received: true },
+  }, null, 2));
+  const res = runInstalledGate(proj, ['write-verify-receipt', 'add-widget', receiptInput]);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.pass, true, JSON.stringify(out));
+  const receipt = JSON.parse(fs.readFileSync(receiptInput, 'utf8'));
+  assert.equal(receipt.change, 'add-widget');
+  assert.equal(receipt.version, 1);
+  assert.ok(receipt.head, '缺少 head');
+  assert.ok(receipt.fingerprint, '缺少 fingerprint');
+});
+
+await run('build 完成 phase=verify + 移除 marker → detect 无矛盾且建议 verify（F5）', () => {
+  const { proj } = makeRuntimeFixture();
+  writeCanonicalChange(proj);
+  // 模拟 build 完成（模板顺序）：先写 phase=verify，再删 marker
+  write(proj, '.openflow/phase', JSON.stringify({ version: 1, change: 'add-widget', phase: 'verify' }));
+  fs.rmSync(path.join(proj, '.openflow', 'building'), { force: true });
+  const detect = path.join(proj, '.claude', 'hooks', 'openflow-detect.mjs');
+  const res = spawnSync(process.execPath, [detect], {
+    cwd: proj, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  assert.equal(res.status, 0, res.stderr);
+  const json = JSON.parse(res.stdout);
+  assert.equal(json.suggested_phase, 'verify', `suggested=${json.suggested_phase} contradictions=${JSON.stringify(json.contradictions)}`);
+  assert.ok(
+    !(json.contradictions || []).some((c) => c.id && ['task-build-missing-artifacts', 'bootstrap-production-conflict'].includes(c.id)),
+    `出现 phase/marker 阻塞矛盾: ${JSON.stringify(json.contradictions)}`
+  );
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

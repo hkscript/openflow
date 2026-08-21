@@ -134,6 +134,32 @@ function checkProposal(cwd, changeName) {
   };
 }
 
+// ---- canonical test-plan stable rows (Task 7) ----
+
+// The canonical test-plan grammar emitted by the spec template: one stable row
+// per test case — `T-001: \`tests/auth/test_login.py::test_login_with_valid_credentials\`` —
+// optionally followed by a status suffix (`✅ PASS` / `⬜ TODO` / `❌ FAIL`).
+// This is the single source of truth shared by enforcement, Gate, and detect.
+function parseCanonicalTestRows(content) {
+  const out = [];
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const m = trimmed.match(/^([T#]\S+)\s*:\s*`([^`]+)`(?:\s+(.+))?$/);
+    if (!m) continue;
+    const id = m[1];
+    const selector = m[2].trim();
+    const sep = selector.lastIndexOf('::');
+    const file = sep === -1 ? selector : selector.slice(0, sep);
+    const suffix = m[3] || '';
+    let status = 'todo';
+    if (/FAIL|❌/.test(suffix)) status = 'fail';
+    else if (/PASS|✅/.test(suffix)) status = 'pass';
+    out.push({ id, file, selector, status });
+  }
+  return out;
+}
+
 // ---- check-test-plan ----
 
 function checkTestPlan(cwd, changeName) {
@@ -151,31 +177,41 @@ function checkTestPlan(cwd, changeName) {
     };
   }
 
-  // Count test rows and statuses
-  const lines = content.split('\n');
-  let inTable = false, headerSkipped = false;
+  // Canonical stable rows are the source of truth; the legacy table grammar is
+  // still accepted for pre-existing test-plans.
+  const rows = parseCanonicalTestRows(content);
   let pass = 0, todo = 0, fail = 0, total = 0;
-
-  // Also extract test file paths from the table
   const testFiles = new Set();
-  const fileRe = /`([^`]+\.[a-z]{2,6})(?:::[^`]+)?`/gi;
 
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (/^\|[-| ]+\|$/.test(trimmed)) { inTable = true; headerSkipped = true; continue; }
-    if (!inTable) continue;
-    if (!trimmed.startsWith('|')) { inTable = false; continue; }
-    if (!headerSkipped) { headerSkipped = true; continue; }
+  if (rows.length > 0) {
+    for (const r of rows) {
+      total++;
+      if (r.status === 'pass') pass++;
+      else if (r.status === 'fail') fail++;
+      else todo++;
+      testFiles.add(r.file);
+    }
+  } else {
+    // Legacy table rows (`| 1 | … | ✅ PASS |`).
+    const lines = content.split('\n');
+    let inTable = false, headerSkipped = false;
+    const fileRe = /`([^`]+\.[a-z]{2,6})(?:::[^`]+)?`/gi;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (/^\|[-| ]+\|$/.test(trimmed)) { inTable = true; headerSkipped = true; continue; }
+      if (!inTable) continue;
+      if (!trimmed.startsWith('|')) { inTable = false; continue; }
+      if (!headerSkipped) { headerSkipped = true; continue; }
 
-    total++;
-    if (/✅|PASS/i.test(line)) pass++;
-    else if (/FAIL|❌.*FAIL/i.test(line)) fail++;
-    else todo++;
+      total++;
+      if (/✅|PASS/i.test(line)) pass++;
+      else if (/FAIL|❌.*FAIL/i.test(line)) fail++;
+      else todo++;
 
-    // Extract test file paths from this row
-    for (const m of line.matchAll(fileRe)) {
-      const p = m[1].split('::')[0]; // strip function name
-      testFiles.add(p);
+      for (const m of line.matchAll(fileRe)) {
+        const p = m[1].split('::')[0]; // strip function name
+        testFiles.add(p);
+      }
     }
   }
 
@@ -234,42 +270,51 @@ function checkCrossRef(cwd, changeName) {
     };
   }
 
-  // Extract test numbers from test-plan.md (from the # column)
-  const testNums = [];
-  for (const m of tpContent.matchAll(/\|\s*(\d+)\s*\|/g)) {
-    const num = parseInt(m[1]);
-    if (!testNums.includes(num)) testNums.push(num);
+  // Extract stable IDs (T-001 / legacy #N) from canonical test-plan rows.
+  const tpIds = [];
+  for (const r of parseCanonicalTestRows(tpContent)) {
+    if (!tpIds.includes(r.id)) tpIds.push(r.id);
+  }
+  // Legacy table fallback: numeric `#` column.
+  if (tpIds.length === 0) {
+    for (const m of tpContent.matchAll(/\|\s*(\d+)\s*\|/g)) {
+      const id = `#${parseInt(m[1])}`;
+      if (!tpIds.includes(id)) tpIds.push(id);
+    }
   }
 
-  // Extract test references from plan-ready.md
-  // Patterns: "#1, #2", "覆盖场景：#1,#3", "测试编号：#5", etc.
-  const refNums = new Set();
-  for (const m of prContent.matchAll(/#(\d+)/g)) {
-    refNums.add(parseInt(m[1]));
+  // Extract references from plan-ready: `- Test cases: T-001, T-002` tokens
+  // (canonical), plus legacy `#N` references only when the test-plan itself is
+  // in legacy numeric form (so a mixed plan never reports false orphans).
+  const refIds = new Set();
+  const tcRe = /Test cases?\s*:\s*([^\n]*)/gi;
+  for (const m of prContent.matchAll(tcRe)) {
+    for (const tok of m[1].split(/[,\s]+/)) {
+      const t = tok.trim().replace(/^`|`$/g, '');
+      if (/^(?:T-\d+|#\d+)$/.test(t)) refIds.add(t);
+    }
   }
-
-  // Also check "覆盖场景" lines specifically
-  const covRe = /覆盖场景[：:]\s*(.+)/gi;
-  for (const m of prContent.matchAll(covRe)) {
-    for (const nm of m[1].matchAll(/#(\d+)/g)) {
-      refNums.add(parseInt(nm[1]));
+  const usesStable = tpIds.some((id) => /^T-/.test(id));
+  if (!usesStable) {
+    for (const m of prContent.matchAll(/#(\d+)/g)) {
+      refIds.add(`#${parseInt(m[1])}`);
     }
   }
 
   const issues = [];
-  const orphanTests = testNums.filter(n => !refNums.has(n));
-  const untestableTasks = [...refNums].filter(n => !testNums.includes(n));
+  const orphanTests = tpIds.filter((id) => !refIds.has(id));
+  const untestableTasks = [...refIds].filter((id) => !tpIds.includes(id));
 
   if (orphanTests.length > 0) {
     issues.push({
       type: 'uncovered_test',
-      detail: `Tests #${orphanTests.join(', #')} in test-plan have no matching task in plan-ready`,
+      detail: `Tests ${orphanTests.join(', ')} in test-plan have no matching task in plan-ready`,
     });
   }
   if (untestableTasks.length > 0) {
     issues.push({
       type: 'orphan_task',
-      detail: `plan-ready references tests #${[...untestableTasks].join(', #')} not found in test-plan`,
+      detail: `plan-ready references tests ${[...untestableTasks].join(', ')} not found in test-plan`,
     });
   }
 
@@ -277,7 +322,7 @@ function checkCrossRef(cwd, changeName) {
     pass: issues.length === 0,
     issues,
     summary: issues.length === 0
-      ? `${testNums.length} tests, all covered by plan-ready tasks.`
+      ? `${tpIds.length} tests, all covered by plan-ready tasks.`
       : `${issues.length} cross-reference issue(s) found.`,
   };
 }

@@ -197,7 +197,7 @@ Step 4: 运行测试 → 确认 PASS（绿）
 Step 5: 可选重构
 Step 6: git commit（单 task）
 Step 7: 更新 plan-ready.md 中该 task 的 checkbox 为 [x]
-Step 8: 更新 test-plan.md 中对应测试行的状态为 ✅
+Step 8: 在 test-plan.md 对应稳定行**行尾**追加状态后缀 `✅ PASS`（保持 `T-00x: \`<选择器>\`` 行格式不变，只在反引号后追加后缀，如 `T-001: \`tests/auth/test_login.py::test_login_with_valid_credentials\` ✅ PASS`）
 ```
 
 **迁移期旧引用**：plan-ready/test-plan 中旧的唯一 `#N` 引用可临时使用；但下次 spec/amend 编辑时必须转为稳定 ID `T-00x`。**混合 `T-id` 与 `#N`、重复、歧义引用会导致 `tdd-task-unmapped` 报错（fail-closed）**，不要混用。
@@ -228,7 +228,14 @@ Step 8: 更新 test-plan.md 中对应测试行的状态为 ✅
 
 **辅助脚本**：gate.mjs `check-build-done <变更名>` 可自动检测 task 完成状态、测试 PASS 情况和 building 标记。路径推导同上（`skills/openflow/SKILL.md` → `hooks/openflow-gate.mjs`）。
 
-全部满足后，**删除 `.openflow/building` 标记文件**（退出 build 阶段），然后输出：
+全部满足后，**切换阶段到 verify 并移除 building 标记**（先写 phase=verify 再删 marker，避免 detect 出现 task-build 无 marker 的矛盾窗口）：
+
+```bash
+printf '%s\n' '{"version":1,"change":"<变更名>","phase":"verify"}' > .openflow/phase
+rm -f .openflow/building
+```
+
+然后输出：
 > "所有实现任务已完成，测试全部通过（N 个测试覆盖 M 个场景），[前端/后端/全栈] 均已修改完毕。
 > 接下来用 `/openflow verify` 做归档前验证（全量测试 + 覆盖率 + 设计一致性）。"
 

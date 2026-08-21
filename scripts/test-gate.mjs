@@ -706,6 +706,50 @@ console.log('\n[8] check-verify-prerequisites');
   });
 }
 
+console.log('\n[8b] canonical test-plan 稳定行（review F1/F2）');
+
+{
+  const CANONICAL_TP = [
+    'T-001: `tests/auth/test_login.py::test_login_with_valid_credentials` ✅ PASS',
+    'T-002: `tests/auth/test_login.py::test_login_with_wrong_password` ✅ PASS',
+  ].join('\n');
+  const CANONICAL_PR = [
+    '# plan-ready', '',
+    '### Task 1: login',
+    '- Test cases: T-001, T-002',
+    '- Files: `src/auth/login.py`, `tests/auth/test_login.py`',
+    '- 改动文件：`src/auth/login.py` [Verified]',
+    '- [x] 实现登录',
+    '- [x] 补测试',
+  ].join('\n');
+
+  run('canonical 稳定行 -> check-build-done pass', () => {
+    const { dir } = makeGateFixture();
+    write(dir, 'openspec/changes/add-widget/test-plan.md', CANONICAL_TP);
+    write(dir, 'openspec/changes/add-widget/plan-ready.md', CANONICAL_PR);
+    write(dir, 'tests/auth/test_login.py', 'def test_login_with_valid_credentials():\n    assert True\n\ndef test_login_with_wrong_password():\n    assert True\n');
+    write(dir, 'src/auth/login.py', 'def login(u, p):\n    return True\n');
+    const r = runGate(dir, 'check-build-done', 'add-widget');
+    assert.equal(r.pass, true, JSON.stringify(r));
+  });
+
+  run('canonical 稳定行 -> check-cross-ref 用 T-001 对账 pass', () => {
+    const { dir } = makeGateFixture();
+    write(dir, 'openspec/changes/add-widget/test-plan.md', CANONICAL_TP);
+    write(dir, 'openspec/changes/add-widget/plan-ready.md', CANONICAL_PR);
+    const r = runGate(dir, 'check-cross-ref', 'add-widget');
+    assert.equal(r.pass, true, JSON.stringify(r));
+  });
+
+  run('canonical 稳定行 + ❌ FAIL 后缀 -> all_tests_pass false', () => {
+    const { dir } = makeGateFixture();
+    write(dir, 'openspec/changes/add-widget/test-plan.md', CANONICAL_TP.replace(/✅ PASS/g, '❌ FAIL'));
+    const r = runGate(dir, 'check-build-done', 'add-widget');
+    assert.equal(r.pass, false);
+    assert.equal(r.all_tests_pass, false);
+  });
+}
+
 console.log('\n[9] write-verify-receipt 原子写入');
 
 {

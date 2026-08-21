@@ -290,7 +290,11 @@ function parseTestPlanRows(content: string): TestSelector[] {
   for (const line of content.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    const m = trimmed.match(/^([T#]\S+)\s*:\s*`([^`]+)`$/);
+    // Canonical stable-row grammar (Task 7): `T-001: \`file::selector\`` with an
+    // optional trailing status suffix (`✅ PASS` / `⬜ TODO` / `❌ FAIL`). The
+    // suffix is captured and ignored here — the selector mapping only reads the
+    // backtick content, so status updates never corrupt TDD scoping.
+    const m = trimmed.match(/^([T#]\S+)\s*:\s*`([^`]+)`(?:\s+.+)?$/);
     if (!m) continue;
     const id = m[1];
     const selector = m[2].trim();

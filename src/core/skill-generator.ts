@@ -46,17 +46,25 @@ export function generateSkills(options: GenerateOptions): void {
       fs.mkdirSync(skillsDir, { recursive: true });
     }
 
+    // Lifecycle hook runtime (detect/gate/fingerprint) is installed for Claude
+    // (`.claude/hooks`) and OpenCode (`.opencode/hooks`); codex/cursor install
+    // skills only. `hasEnforceScript` is a stricter subset — only Claude gets an
+    // enforce hook script (OpenCode uses a plugin) — and drives the legacy .py
+    // reference removal.
+    const hasHookRuntime = Boolean(toolPaths.hooksDir) || tool === 'opencode';
+    const hasEnforceScript = Boolean(toolPaths.hooksDir);
+
     // Generate main SKILL.md
-    generateSkillFile(skillsDir, 'SKILL.md', depStatus, tool, effectiveSkillsDir, Boolean(toolPaths.hooksDir));
+    generateSkillFile(skillsDir, 'SKILL.md', depStatus, tool, effectiveSkillsDir, hasHookRuntime, hasEnforceScript);
 
     // Generate phase files
     const phases = ['proposal', 'brainstorming', 'spec', 'amend', 'build', 'verify', 'close'];
     for (const phase of phases) {
-      generateSkillFile(skillsDir, `${phase}.md`, depStatus, tool, effectiveSkillsDir, Boolean(toolPaths.hooksDir));
+      generateSkillFile(skillsDir, `${phase}.md`, depStatus, tool, effectiveSkillsDir, hasHookRuntime, hasEnforceScript);
     }
 
     // Generate sub-skill shortcuts (e.g., openflow-proposal, openflow-spec)
-    generateSubSkillShortcuts(baseDir, toolPaths, phases, depStatus, tool, effectiveSkillsDir);
+    generateSubSkillShortcuts(baseDir, toolPaths, phases, depStatus, tool, effectiveSkillsDir, hasHookRuntime, hasEnforceScript);
 
     logger.success(`${tool} skills generated`);
 
@@ -78,7 +86,9 @@ function generateSubSkillShortcuts(
   phases: string[],
   depStatus: DepStatus,
   tool: string,
-  effectiveSkillsDir: string
+  effectiveSkillsDir: string,
+  hasHookRuntime: boolean,
+  hasEnforceScript: boolean
 ): void {
   logger.step('Generating sub-skill shortcuts ...');
 
@@ -101,7 +111,7 @@ function generateSubSkillShortcuts(
     }
 
     // Replace tool-specific paths in content
-    content = replaceToolPaths(content, effectiveSkillsDir, Boolean(toolPaths.hooksDir));
+    content = replaceToolPaths(content, effectiveSkillsDir, hasHookRuntime, hasEnforceScript);
 
     const targetPath = path.join(subSkillDir, 'SKILL.md');
     fs.writeFileSync(targetPath, content);
@@ -109,7 +119,7 @@ function generateSubSkillShortcuts(
   }
 }
 
-function replaceToolPaths(content: string, effectiveSkillsDir: string, hasHooks: boolean): string {
+function replaceToolPaths(content: string, effectiveSkillsDir: string, hasHookRuntime: boolean, hasEnforceScript: boolean): string {
   // Artifact root for the target tool: the skills dir minus its trailing
   // "/skills" suffix (`.claude`, `.opencode`, or `.config/opencode`).
   const configDir = effectiveSkillsDir.replace(/\/skills$/, '');
@@ -118,12 +128,22 @@ function replaceToolPaths(content: string, effectiveSkillsDir: string, hasHooks:
   // Replace global skill path references
   content = content.replace(/~\/\.claude\/skills\/openflow\//g, `~/${effectiveSkillsDir}/openflow/`);
   // Replace hook path references (gate/detect/fingerprint/enforce) with the
-  // target tool's hooks root.
-  content = content.replace(/\.claude\/hooks\//g, `${configDir}/hooks/`);
-  content = content.replace(/~\/\.claude\/hooks\//g, `~/${configDir}/hooks/`);
+  // target tool's hooks root — but ONLY for clients that install a lifecycle
+  // runtime (Claude, OpenCode). codex/cursor install skills only: their
+  // rendered templates must not suggest executable phantom `.codex/hooks/…`
+  // paths, so hook-path references are replaced with an explicit unsupported
+  // marker instead (review F3).
+  const HOOK_MISSING_MARKER = 'hooks/（⚠️ 本客户端未安装 lifecycle 运行时：codex/cursor 仅安装 skills）';
+  if (hasHookRuntime) {
+    content = content.replace(/\.claude\/hooks\//g, `${configDir}/hooks/`);
+    content = content.replace(/~\/\.claude\/hooks\//g, `~/${configDir}/hooks/`);
+  } else {
+    content = content.replace(/\.claude\/hooks\//g, HOOK_MISSING_MARKER);
+    content = content.replace(/~\/\.claude\/hooks\//g, HOOK_MISSING_MARKER);
+  }
   // For tools without an enforce hook script (OpenCode uses a plugin; codex/
   // cursor have none), remove the legacy .py enforce reference sentence.
-  if (!hasHooks) {
+  if (!hasEnforceScript) {
     content = content.replace(/详见 `[^`]*hooks\/openflow-enforce\.py`。\n?/g, '');
   }
   return content;
@@ -339,7 +359,7 @@ function mergeOpencodePluginConfig(opencodeJsonPath: string, pluginDest: string)
   logger.step(`  Plugin registered in opencode.json: ${canonical}`);
 }
 
-function generateSkillFile(skillsDir: string, filename: string, depStatus: DepStatus, tool?: string, effectiveSkillsDir?: string, hasHooks?: boolean): void {
+function generateSkillFile(skillsDir: string, filename: string, depStatus: DepStatus, tool?: string, effectiveSkillsDir?: string, hasHookRuntime?: boolean, hasEnforceScript?: boolean): void {
   const templatePath = path.join(TEMPLATES_DIR, filename);
 
   let content: string;
@@ -353,7 +373,7 @@ function generateSkillFile(skillsDir: string, filename: string, depStatus: DepSt
 
   // Replace tool-specific paths
   if (effectiveSkillsDir) {
-    content = replaceToolPaths(content, effectiveSkillsDir, Boolean(hasHooks));
+    content = replaceToolPaths(content, effectiveSkillsDir, Boolean(hasHookRuntime), Boolean(hasEnforceScript));
   }
 
   // Inject validation hint into spec.md for OpenSpec CLI
