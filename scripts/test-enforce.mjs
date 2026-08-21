@@ -18,6 +18,12 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+// Assert Node 20+ immediately.
+if (Number(process.versions.node.split('.')[0]) < 20) {
+  console.error(`需要 Node 20+，当前 ${process.versions.node}`);
+  process.exit(1);
+}
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const HOOK = path.resolve(__dirname, '..', 'hooks', 'enforce.mjs');
 const DIST_DEP = path.resolve(__dirname, '..', 'dist', 'core', 'dependency-check.js');

@@ -10,7 +10,10 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "prepublishOnly": "npm run build",
-    "postinstall": "node ./scripts/postinstall.js"
+    "postinstall": "node ./scripts/postinstall.js",
+    "test:enforce:unit": "pnpm node scripts/test-enforce-rules.mjs && pnpm node scripts/test-enforce.mjs && pnpm node scripts/test-gate.mjs && pnpm node scripts/test-detect.mjs && pnpm node scripts/test-install.mjs",
+    "test:enforce": "pnpm run build && pnpm run test:enforce:unit",
+    "test": "pnpm run test:enforce"
   },
   "keywords": [
     "claude-code",
