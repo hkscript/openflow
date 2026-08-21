@@ -1,14 +1,17 @@
 <!-- OPENSPEC:START -->
+
 # OpenSpec Instructions
 
 These instructions are for AI assistants working in this project.
 
 Always open `@/openspec/AGENTS.md` when the request:
+
 - Mentions planning or proposals (words like proposal, spec, change, plan)
 - Introduces new capabilities, breaking changes, architecture shifts, or big performance/security work
 - Sounds ambiguous and you need the authoritative spec before coding
 
 Use `@/openspec/AGENTS.md` to learn:
+
 - How to create and apply change proposals
 - Spec format and conventions
 - Project structure and guidelines
@@ -49,11 +52,15 @@ bin/openflow.js    CLI 入口
     && echo "n" | "$N20" "$REPO"/bin/openflow.js init --tools claude \
     && "$N20" .claude/hooks/openflow-detect.mjs        # 测试状态检测
   ```
-  说明：
-  - `echo "n"` 回答非交互 shell 里 init 的 "Run openspec init?" 确认（hook 安装不受影响）；
-  - 空临时目录没有 `node_modules/.bin`，`pnpm exec openflow` 不可用，须用 pnpm 的 node 二进制跑 CLI 绝对路径；
+
+  说明：- `echo "n"` 回答非交互 shell 里 init 的 "Run openspec init?" 确认（hook 安装不受影响）；- 空临时目录没有 `node_modules/.bin`，`pnpm exec openflow` 不可用，须用 pnpm 的 node 二进制跑 CLI 绝对路径；
   - 若要验证 `test_plan_stats` 计数，建一个 `openspec/changes/<名>/test-plan.md` 再跑 detect。
-  在临时目录验证，不在本项目内吃狗粮（`.claude/` 已 gitignore）。
+    在临时目录验证，不在本项目内吃狗粮（`.claude/` 已 gitignore）。
 - **新增 hook 脚本时**：放 `hooks/` 目录，在 `src/core/skill-generator.ts` 的 `installHooks()` 中注册拷贝逻辑
 - **脚本零依赖**：所有 `.mjs` 脚本必须是纯 Node 20+，不依赖 npm 包
 - **TypeScript 构建**：`pnpm run build`（tsc），输出到 `dist/`
+
+
+## 禁止事项
+
+禁止在本项目中执行 openflow init 命令
