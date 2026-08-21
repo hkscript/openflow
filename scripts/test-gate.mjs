@@ -26,6 +26,7 @@ if (Number(process.versions.node.split('.')[0]) < 20) {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const HELPER = path.resolve(__dirname, '..', 'hooks', 'lifecycle-fingerprint.mjs');
+const GATE = path.resolve(__dirname, '..', 'hooks', 'gate.mjs');
 const fp = await import(pathToFileURL(HELPER).href);
 
 let passed = 0;
@@ -87,6 +88,7 @@ function makeRepo() {
   write(dir, 'a.txt', 'alpha\n');
   write(dir, 'b.txt', 'bravo\n');
   write(dir, 'src/app.js', 'console.log(1);\n');
+  write(dir, 'package.json', '{"name":"fixture","version":"1.0.0"}\n');
   git(dir, ['add', '.']);
   git(dir, ['commit', '-qm', 'baseline']);
   return dir;
@@ -471,6 +473,414 @@ console.log('\n[6] 过期（stale）场景');
     const v = fp.validateVerifyReceipt(dir, 'add-widget');
     assert.equal(v.pass, false);
     assert.ok(v.blockers.some((b) => /stale|head/i.test(b)), JSON.stringify(v.blockers));
+  });
+}
+
+// ============ Task 3: safe Gate receipt + verified archive ============
+
+// Fake OpenSpec runner: an executable Node script (shebang = process.execPath)
+// that logs argv to an out-of-repo log and obeys FAKE_VALIDATE_EXIT /
+// FAKE_ARCHIVE_EXIT plus archive behavior toggles. The Gate runner invokes it
+// via execFileSync(process.env.OPENFLOW_OPENSPEC_BIN || 'openspec', argv).
+// FAKE_ARGV_LOG lives in os.tmpdir() (NOT the fixture repo) so the fake's own
+// argv logging can never perturb the worktree fingerprint under test.
+const FAKE_ARGV_LOG = path.join(os.tmpdir(), 'openflow-fake-argv.log');
+
+function makeFakeOpenspec(dir) {
+  const bin = path.join(dir, 'openspec-fake');
+  const lines = [
+    'const fs = require("fs");',
+    'const path = require("path");',
+    'const argv = process.argv.slice(2);',
+    'if (process.env.FAKE_ARGV_LOG) fs.appendFileSync(process.env.FAKE_ARGV_LOG, JSON.stringify(argv) + "\\n");',
+    'const mode = argv[0];',
+    'const key = mode === "validate" ? "FAKE_VALIDATE_EXIT" : mode === "archive" ? "FAKE_ARCHIVE_EXIT" : "FAKE_EXIT";',
+    'let code = process.env[key] !== undefined ? Number(process.env[key]) : 0;',
+    'const cwd = process.cwd();',
+    'const src = path.join(cwd, "openspec", "changes", argv[1] || "");',
+    'if (code === 0 && mode === "archive" && process.env.FAKE_ARCHIVE_NOOP !== "1" && fs.existsSync(src)) {',
+    '  const dst = path.join(cwd, "openspec", "changes", "archive", new Date().toISOString().slice(0, 10) + "-" + argv[1]);',
+    '  fs.mkdirSync(dst, { recursive: true });',
+    '  const missing = (process.env.FAKE_ARCHIVE_MISSING || "").split(",").filter(Boolean);',
+    '  for (const f of fs.readdirSync(src)) {',
+    '    if (missing.includes(f)) { fs.rmSync(path.join(src, f), { force: true }); continue; }',
+    '    fs.renameSync(path.join(src, f), path.join(dst, f));',
+    '  }',
+    '  if (!missing.includes("tasks.md")) fs.writeFileSync(path.join(dst, "tasks.md"), "# tasks\\n");',
+    '  if (!missing.includes("lessons.md")) fs.writeFileSync(path.join(dst, "lessons.md"), "# lessons\\n");',
+    '  fs.rmSync(src, { recursive: true, force: true });',
+    '}',
+    'if (code === 0 && mode === "archive" && process.env.FAKE_ARCHIVE_MULTI === "1") {',
+    '  fs.mkdirSync(path.join(cwd, "openspec", "changes", "archive", new Date().toISOString().slice(0, 10) + "-other-change"), { recursive: true });',
+    '}',
+    'if (code !== 0 && process.env.FAKE_STDERR) process.stderr.write(process.env.FAKE_STDERR);',
+    'process.exit(code);',
+  ];
+  fs.writeFileSync(bin, `#!${process.execPath}\n` + lines.join('\n'));
+  fs.chmodSync(bin, 0o755);
+  return bin;
+}
+
+// Mutable env injected into every runGate subprocess.
+let gateEnv = {};
+
+function runGate(dir, subcommand, changeName, ...extra) {
+  const args = [GATE, subcommand];
+  if (changeName !== undefined) args.push(changeName);
+  args.push(...extra);
+  const env = { ...process.env, ...gateEnv, FAKE_ARGV_LOG };
+  let out;
+  try {
+    out = execFileSync(process.execPath, args, {
+      cwd: dir, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], env,
+    });
+  } catch (e) {
+    out = (e.stdout ? String(e.stdout) : '') + (e.stderr ? String(e.stderr) : '');
+    if (!out.trim()) throw e;
+  }
+  try { return JSON.parse(out); } catch { return { raw: out }; }
+}
+
+function argvLog() {
+  try {
+    return fs.readFileSync(FAKE_ARGV_LOG, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  } catch { return []; }
+}
+function clearArgvLog() {
+  fs.writeFileSync(FAKE_ARGV_LOG, '');
+}
+function archiveInvocations() {
+  return argvLog().filter((a) => a[0] === 'archive');
+}
+
+// A change fixture that passes check-verify-prerequisites: complete
+// proposal / test-plan (all PASS) / plan-ready (all [x]) / strict design,
+// no building marker, no unresolved issues, fake `openspec validate` exit 0.
+const PROPOSAL = [
+  '## Why', '',
+  'The widget dashboard needs live widget data for on-call operators.', '',
+  '## What Changes', '',
+  '- Add widget dashboard', '- Add widget data source', '',
+  '## Impact', '', '- New widget module',
+].join('\n');
+
+const TEST_PLAN = [
+  '# test-plan', '',
+  '| # | 场景 | 状态 |',
+  '|---|---|---|',
+  '| 1 | 场景一：widget 渲染 | ✅ PASS |',
+  '| 2 | 场景二：widget 数据 | ✅ PASS |',
+].join('\n');
+
+const PLAN_READY = [
+  '# plan-ready', '',
+  '- [x] 实现 widget 渲染',
+  '- [x] 实现 widget 数据源', '',
+  '- [Verified] 改动文件 src/app.js',
+].join('\n');
+
+const DESIGN = [
+  '## 现状与影响面', '',
+  'widget 模块目前缺失，需要新增。', '',
+  '## 改动文件', '',
+  '- src/app.js',
+].join('\n');
+
+function makeGateFixture() {
+  const dir = makeRepo();
+  write(dir, 'openspec/changes/add-widget/proposal.md', PROPOSAL);
+  write(dir, 'openspec/changes/add-widget/test-plan.md', TEST_PLAN);
+  write(dir, 'openspec/changes/add-widget/plan-ready.md', PLAN_READY);
+  write(dir, 'openspec/changes/add-widget/design.md', DESIGN);
+  const fakeBin = makeFakeOpenspec(dir);
+  gateEnv = { OPENFLOW_OPENSPEC_BIN: fakeBin };
+  return { dir, fakeBin };
+}
+
+function writeReceipt(dir, mutate) {
+  const r = fp.collectWorktreeFingerprint(dir, 'add-widget');
+  if (!r.ok) throw new Error(r.blocker);
+  const receipt = {
+    version: 1,
+    change: 'add-widget',
+    head: r.head,
+    fingerprint: r.value,
+    testRuns: [{ name: 'verify', exitCode: 0 }],
+    scenarioCoverage: { mapped: 3, total: 3 },
+    designConsistency: { pass: true, blockers: [] },
+    userConfirmation: { received: true },
+  };
+  if (mutate) mutate(receipt);
+  write(dir, 'openspec/changes/add-widget/verify-result.json', JSON.stringify(receipt, null, 2));
+  return receipt;
+}
+
+// Ready-to-archive fixture: valid fresh receipt + .openflow/phase marker,
+// no .openflow/building (build phase already exited).
+function archiveFixture() {
+  const { dir } = makeGateFixture();
+  writeReceipt(dir);
+  write(dir, '.openflow/phase', JSON.stringify({ version: 1, change: 'add-widget', phase: 'verify', mode: 'bootstrap' }));
+  return { dir };
+}
+
+console.log('\n[7] 安全 argv 注入拒绝（runner 边界）');
+
+{
+  const cases = ['', '../x', 'x y', 'x; touch pwned'];
+  for (const bad of cases) {
+    run(`拒绝非法 change 名 ${JSON.stringify(bad)} 不调用 runner`, () => {
+      const { dir } = makeGateFixture();
+      clearArgvLog();
+      const r = runGate(dir, 'check-verify-prerequisites', bad);
+      assert.equal(r.pass, false, JSON.stringify(r));
+      assert.match((r.blockers || []).join('\n'), /invalid-change/i, JSON.stringify(r));
+      assert.equal(argvLog().length, 0, 'runner must not be invoked for an invalid change name');
+    });
+  }
+}
+
+console.log('\n[8] check-verify-prerequisites');
+
+{
+  run('完整 fixture -> pass true', () => {
+    const { dir } = makeGateFixture();
+    assert.equal(runGate(dir, 'check-verify-prerequisites', 'add-widget').pass, true);
+  });
+
+  run('缺 ## 现状与影响面 -> pass false', () => {
+    const { dir } = makeGateFixture();
+    write(dir, 'openspec/changes/add-widget/design.md', DESIGN.replace('## 现状与影响面', '## 现状'));
+    const r = runGate(dir, 'check-verify-prerequisites', 'add-widget');
+    assert.equal(r.pass, false);
+    assert.match(r.blockers.join('\n'), /现状与影响面/);
+  });
+
+  run('缺 ## 改动文件 -> pass false（strict）', () => {
+    const { dir } = makeGateFixture();
+    write(dir, 'openspec/changes/add-widget/design.md', DESIGN.replace('## 改动文件', '## 其他'));
+    const r = runGate(dir, 'check-verify-prerequisites', 'add-widget');
+    assert.equal(r.pass, false);
+    assert.match(r.blockers.join('\n'), /改动文件/);
+  });
+
+  run('测试未全通过 -> pass false', () => {
+    const { dir } = makeGateFixture();
+    write(dir, 'openspec/changes/add-widget/test-plan.md', TEST_PLAN.replace('✅ PASS', '❌ FAIL'));
+    const r = runGate(dir, 'check-verify-prerequisites', 'add-widget');
+    assert.equal(r.pass, false);
+  });
+
+  run('任务未完成 -> pass false', () => {
+    const { dir } = makeGateFixture();
+    write(dir, 'openspec/changes/add-widget/plan-ready.md', PLAN_READY.replace('[x]', '[ ]'));
+    const r = runGate(dir, 'check-verify-prerequisites', 'add-widget');
+    assert.equal(r.pass, false);
+  });
+
+  run('building marker 存在 -> pass false', () => {
+    const { dir } = makeGateFixture();
+    write(dir, '.openflow/building', 'add-widget');
+    const r = runGate(dir, 'check-verify-prerequisites', 'add-widget');
+    assert.equal(r.pass, false);
+    assert.match(r.blockers.join('\n'), /building|marker/i);
+  });
+
+  run('未解决 verify issues -> pass false', () => {
+    const { dir } = makeGateFixture();
+    write(dir, 'openspec/changes/add-widget/verify-issues.md', '# issues\n\n- ❌ 未解决项\n');
+    const r = runGate(dir, 'check-verify-prerequisites', 'add-widget');
+    assert.equal(r.pass, false);
+    assert.match(r.blockers.join('\n'), /阻挡|verify/i);
+  });
+
+  run('openspec validate 失败 -> pass false', () => {
+    const { dir } = makeGateFixture();
+    gateEnv.FAKE_VALIDATE_EXIT = '1';
+    gateEnv.FAKE_STDERR = 'validate failed: bad spec';
+    const r = runGate(dir, 'check-verify-prerequisites', 'add-widget');
+    delete gateEnv.FAKE_VALIDATE_EXIT;
+    delete gateEnv.FAKE_STDERR;
+    assert.equal(r.pass, false);
+    assert.match(r.blockers.join('\n'), /validate/i);
+  });
+}
+
+console.log('\n[9] write-verify-receipt 原子写入');
+
+{
+  const INPUT = {
+    testRuns: [{ name: 'verify', exitCode: 0 }],
+    scenarioCoverage: { mapped: 3, total: 3 },
+    designConsistency: { pass: true, blockers: [] },
+    userConfirmation: { received: true },
+  };
+
+  run('写 receipt -> pass true / 回读校验通过', () => {
+    const { dir } = makeGateFixture();
+    write(dir, 'receipt-input.json', JSON.stringify(INPUT));
+    const r = runGate(dir, 'write-verify-receipt', 'add-widget', path.join(dir, 'receipt-input.json'));
+    assert.equal(r.pass, true, JSON.stringify(r.blockers));
+    assert.ok(r.receipt_path, 'receipt_path missing');
+    assert.ok(fs.existsSync(path.join(dir, 'openspec', 'changes', 'add-widget', 'verify-result.json')));
+    const v = fp.validateVerifyReceipt(dir, 'add-widget');
+    assert.equal(v.pass, true, JSON.stringify(v.blockers));
+  });
+
+  run('非法 input JSON -> pass false', () => {
+    const { dir } = makeGateFixture();
+    write(dir, 'receipt-input.json', '{bad json');
+    const r = runGate(dir, 'write-verify-receipt', 'add-widget', path.join(dir, 'receipt-input.json'));
+    assert.equal(r.pass, false);
+  });
+
+  run('scenarioCoverage 不一致 -> pass false', () => {
+    const { dir } = makeGateFixture();
+    write(dir, 'receipt-input.json', JSON.stringify({ ...INPUT, scenarioCoverage: { mapped: 2, total: 3 } }));
+    const r = runGate(dir, 'write-verify-receipt', 'add-widget', path.join(dir, 'receipt-input.json'));
+    assert.equal(r.pass, false);
+    assert.match(r.blockers.join('\n'), /scenario/i);
+  });
+
+  run('prerequisites 未满足 -> 不写 receipt', () => {
+    const { dir } = makeGateFixture();
+    write(dir, '.openflow/building', 'add-widget');
+    write(dir, 'receipt-input.json', JSON.stringify(INPUT));
+    const r = runGate(dir, 'write-verify-receipt', 'add-widget', path.join(dir, 'receipt-input.json'));
+    assert.equal(r.pass, false);
+    assert.equal(fs.existsSync(path.join(dir, 'openspec', 'changes', 'add-widget', 'verify-result.json')), false);
+  });
+}
+
+console.log('\n[10] check-verify-ready');
+
+{
+  run('有效 receipt -> pass true', () => {
+    const { dir } = makeGateFixture();
+    writeReceipt(dir);
+    const r = runGate(dir, 'check-verify-ready', 'add-widget');
+    assert.equal(r.pass, true, JSON.stringify(r.blockers));
+  });
+
+  run('无 receipt -> pass false / blockers 含 receipt', () => {
+    const { dir } = makeGateFixture();
+    const r = runGate(dir, 'check-verify-ready', 'add-widget');
+    assert.equal(r.pass, false);
+    assert.match(r.blockers.join('\n'), /receipt/i);
+  });
+
+  run('receipt.change 不一致 -> pass false', () => {
+    const { dir } = makeGateFixture();
+    writeReceipt(dir, (r) => { r.change = 'other-change'; });
+    const r = runGate(dir, 'check-verify-ready', 'add-widget');
+    assert.equal(r.pass, false);
+    assert.match(r.blockers.join('\n'), /mismatch|change/i);
+  });
+
+  const staleCases = [
+    ['tracked 改动', (d) => write(d, 'a.txt', 'edited after receipt\n')],
+    ['staged 改动', (d) => { write(d, 'b.txt', 'staged after receipt\n'); git(d, ['add', 'b.txt']); }],
+    ['untracked 新增', (d) => write(d, 'new-untracked.txt', 'new\n')],
+    ['config 改动', (d) => write(d, 'package.json', '{"name":"fixture","version":"2.0.0"}\n')],
+  ];
+  for (const [label, mutate] of staleCases) {
+    run(`receipt 后 ${label} -> 过期 pass false`, () => {
+      const { dir } = makeGateFixture();
+      writeReceipt(dir);
+      mutate(dir);
+      const r = runGate(dir, 'check-verify-ready', 'add-widget');
+      assert.equal(r.pass, false);
+      assert.match(r.blockers.join('\n'), /stale|fingerprint/i);
+    });
+  }
+}
+
+console.log('\n[11] archive-verified 归档事务');
+
+{
+  run('成功归档 -> 源移除 + 恰一个归档目录 + 标记移除', () => {
+    const { dir } = archiveFixture();
+    const r = runGate(dir, 'archive-verified', 'add-widget');
+    assert.equal(r.pass, true, JSON.stringify(r.blockers));
+    assert.equal(fs.existsSync(path.join(dir, 'openspec', 'changes', 'add-widget')), false);
+    const archiveDir = path.join(dir, 'openspec', 'changes', 'archive');
+    const entries = fs.readdirSync(archiveDir);
+    assert.equal(entries.length, 1, JSON.stringify(entries));
+    assert.match(entries[0], /^\d{4}-\d{2}-\d{2}-add-widget$/);
+    for (const f of ['tasks.md', 'lessons.md', 'verify-result.json']) {
+      assert.ok(fs.existsSync(path.join(archiveDir, entries[0], f)), `missing ${f}`);
+    }
+    assert.equal(fs.existsSync(path.join(dir, '.openflow', 'phase')), false);
+  });
+
+  run('readiness 后改动 -> 归档失败 / archive 未调用 / 标记保留', () => {
+    const { dir } = archiveFixture();
+    write(dir, 'a.txt', 'mutated after ready\n');
+    clearArgvLog();
+    const r = runGate(dir, 'archive-verified', 'add-widget');
+    assert.equal(r.pass, false);
+    assert.match(r.blockers.join('\n'), /stale|fingerprint/i);
+    assert.equal(archiveInvocations().length, 0, 'archive must not be invoked when receipt is stale');
+    assert.ok(fs.existsSync(path.join(dir, '.openflow', 'phase')), 'phase marker preserved');
+    assert.ok(fs.existsSync(path.join(dir, 'openspec', 'changes', 'add-widget')), 'source preserved');
+  });
+
+  run('runner 失败 -> 归档失败 / 标记保留', () => {
+    const { dir } = archiveFixture();
+    gateEnv.FAKE_ARCHIVE_EXIT = '1';
+    gateEnv.FAKE_STDERR = 'archive failed';
+    const r = runGate(dir, 'archive-verified', 'add-widget');
+    delete gateEnv.FAKE_ARCHIVE_EXIT;
+    delete gateEnv.FAKE_STDERR;
+    assert.equal(r.pass, false);
+    assert.match(r.blockers.join('\n'), /archive-failed/i);
+    assert.ok(fs.existsSync(path.join(dir, '.openflow', 'phase')));
+    assert.ok(fs.existsSync(path.join(dir, 'openspec', 'changes', 'add-widget')));
+  });
+
+  run('源目录归档后仍存在 -> 归档失败', () => {
+    const { dir } = archiveFixture();
+    gateEnv.FAKE_ARCHIVE_NOOP = '1';
+    const r = runGate(dir, 'archive-verified', 'add-widget');
+    delete gateEnv.FAKE_ARCHIVE_NOOP;
+    assert.equal(r.pass, false);
+    assert.match(r.blockers.join('\n'), /source/i);
+  });
+
+  run('预存在归档目录 -> 归档失败（0 新目录）', () => {
+    const { dir } = archiveFixture();
+    const date = new Date().toISOString().slice(0, 10);
+    fs.mkdirSync(path.join(dir, 'openspec', 'changes', 'archive', `${date}-add-widget`), { recursive: true });
+    const r = runGate(dir, 'archive-verified', 'add-widget');
+    assert.equal(r.pass, false);
+    assert.match(r.blockers.join('\n'), /archive-dir|count/i);
+  });
+
+  run('多个新归档目录 -> 归档失败', () => {
+    const { dir } = archiveFixture();
+    gateEnv.FAKE_ARCHIVE_MULTI = '1';
+    const r = runGate(dir, 'archive-verified', 'add-widget');
+    delete gateEnv.FAKE_ARCHIVE_MULTI;
+    assert.equal(r.pass, false);
+    assert.match(r.blockers.join('\n'), /archive-dir|count/i);
+  });
+
+  run('丢失 tasks.md/lessons.md -> 归档失败', () => {
+    const { dir } = archiveFixture();
+    gateEnv.FAKE_ARCHIVE_MISSING = 'tasks.md,lessons.md';
+    const r = runGate(dir, 'archive-verified', 'add-widget');
+    delete gateEnv.FAKE_ARCHIVE_MISSING;
+    assert.equal(r.pass, false);
+    assert.match(r.blockers.join('\n'), /tasks|lessons/i);
+  });
+
+  run('丢失 verify-result.json -> 归档失败', () => {
+    const { dir } = archiveFixture();
+    gateEnv.FAKE_ARCHIVE_MISSING = 'verify-result.json';
+    const r = runGate(dir, 'archive-verified', 'add-widget');
+    delete gateEnv.FAKE_ARCHIVE_MISSING;
+    assert.equal(r.pass, false);
+    assert.match(r.blockers.join('\n'), /verify-result/i);
   });
 }
 

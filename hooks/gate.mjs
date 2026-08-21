@@ -35,7 +35,8 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
+import { FINGERPRINT_VERSION, collectWorktreeFingerprint, validateVerifyReceipt } from './lifecycle-fingerprint.mjs';
 
 // ---- helpers ----
 
@@ -50,6 +51,38 @@ function exists(p) {
 function changeDir(cwd, changeName) {
   return path.join(cwd, 'openspec', 'changes', changeName);
 }
+
+// ---- Task 3: validated runner boundary + change-name guard ----
+
+const CHANGE_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+function isValidChangeName(changeName) {
+  return typeof changeName === 'string' && CHANGE_RE.test(changeName);
+}
+
+function errMsg(e) {
+  if (!e) return String(e);
+  if (e.stderr) return String(e.stderr).trim();
+  if (e.message) return String(e.message);
+  return String(e);
+}
+
+// No-shell dispatch boundary: every OpenSpec invocation goes through this one
+// function. The binary comes from OPENFLOW_OPENSPEC_BIN (tests inject a fake),
+// never from a shell-interpolated string; argv is a fixed argument array.
+function runOpenspec(cwd, argv) {
+  const bin = process.env.OPENFLOW_OPENSPEC_BIN || 'openspec';
+  return execFileSync(bin, argv, { cwd, encoding: 'utf8', stdio: 'pipe' });
+}
+
+// Subcommands that take a <change> argument; every one must reject an invalid
+// change name before any path construction or subprocess use.
+const CHANGE_SUBCOMMANDS = new Set([
+  'check-proposal', 'check-test-plan', 'check-cross-ref', 'check-build-done',
+  'check-close-ready', 'check-amend-count', 'check-verify-issues',
+  'check-design-consistency', 'check-verify-prerequisites', 'write-verify-receipt',
+  'check-verify-ready', 'archive-verified',
+]);
 
 // ---- check-proposal ----
 
@@ -414,7 +447,8 @@ function loadGateConfig(cwd) {
   }
 }
 
-function checkDesignConsistency(cwd, changeName) {
+function checkDesignConsistency(cwd, changeName, opts = {}) {
+  const strict = opts.strict === true;
   const cd = changeDir(cwd, changeName);
   const designContent = safeRead(path.join(cd, 'design.md'));
   if (!designContent) {
@@ -434,7 +468,8 @@ function checkDesignConsistency(cwd, changeName) {
   // 改动文件只从「## 改动文件」节提取——现状影响面里的 [Verified] 既有代码引用不再被当改动文件
   const changeSection = extractSection(designContent, '改动文件');
   if (changeSection === null) {
-    warnings.push('design.md 缺少「改动文件」章节，文件一致性对账已跳过（宁漏勿误）');
+    if (strict) blockers.push('design.md 缺少「改动文件」章节（verify 前置条件必填）');
+    else warnings.push('design.md 缺少「改动文件」章节，文件一致性对账已跳过（宁漏勿误）');
     return { pass: blockers.length === 0, design_exists: true, design_file_count: 0, blockers, warnings };
   }
   const designPaths = collectPaths(changeSection);
@@ -917,44 +952,228 @@ function changePointVerdicts(cwd, changeName, designContent) {
   return verdicts;
 }
 
-// ---- check-close-ready ----
+// ---- check-verify-prerequisites ----
+// Verify 前置条件：build 完成 + 未解决项清零 + 严格 design + proposal 格式 +
+// 严格 openspec validate。刻意不读 receipt（receipt 由 checkVerifyReady 单独校验）。
 
-function checkCloseReady(cwd, changeName) {
-  const propCheck = checkProposal(cwd, changeName);
-  const bMarker = exists(path.join(cwd, '.openflow', 'building'));
-  const verifyIssues = checkVerifyIssues(cwd, changeName);
-  const designConsistency = checkDesignConsistency(cwd, changeName);
+function checkVerifyPrerequisites(cwd, changeName) {
+  const blockers = [];
 
-  // Try openspec validate
-  let openspecValid = null;
-  let openspecError = null;
-  try {
-    execSync(`openspec validate ${changeName} --strict`, { cwd, encoding: 'utf-8', timeout: 10000, stdio: 'pipe' });
-    openspecValid = true;
-  } catch (e) {
-    openspecValid = false;
-    openspecError = e.stderr || e.message || 'openspec validate failed';
+  const buildDone = checkBuildDone(cwd, changeName);
+  if (!buildDone.pass) {
+    for (const i of buildDone.issues) blockers.push(`build: ${i.type}: ${i.detail}`);
+    if (buildDone.building_marker_exists) blockers.push('build: building marker still present (build phase not exited)');
   }
 
-  const blockers = [];
-  if (!propCheck.pass) blockers.push('proposal format invalid');
-  if (!openspecValid) blockers.push(`openspec validate failed: ${openspecError}`);
-  if (bMarker) blockers.push('building marker still present (build phase not exited cleanly)');
+  const verifyIssues = checkVerifyIssues(cwd, changeName);
   blockers.push(...verifyIssues.blockers);
+
+  const designConsistency = checkDesignConsistency(cwd, changeName, { strict: true });
   blockers.push(...designConsistency.blockers);
+
+  const propCheck = checkProposal(cwd, changeName);
+  if (!propCheck.pass) blockers.push('proposal format invalid');
+
+  let openspecValid = true;
+  try {
+    runOpenspec(cwd, ['validate', changeName, '--strict']);
+  } catch (e) {
+    openspecValid = false;
+    blockers.push(`openspec validate failed: ${errMsg(e)}`);
+  }
 
   return {
     pass: blockers.length === 0,
     checks: {
-      proposal_format: propCheck.pass,
-      openspec_validate: openspecValid,
-      building_marker_clean: !bMarker,
+      build_done: buildDone.pass,
       verify_issues_resolved: verifyIssues.pass,
       design_consistent: designConsistency.pass,
+      proposal_format: propCheck.pass,
+      openspec_validate: openspecValid,
     },
     blockers,
     warnings: designConsistency.warnings || [],
   };
+}
+
+// ---- write-verify-receipt ----
+
+function writeVerifyReceipt(cwd, changeName, inputPath) {
+  const blockers = [];
+
+  let input;
+  try {
+    input = JSON.parse(fs.readFileSync(inputPath, 'utf8'));
+  } catch (e) {
+    return { pass: false, blockers: [`receipt-input-invalid: ${errMsg(e)}`], receipt_path: null };
+  }
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return { pass: false, blockers: ['receipt-input-invalid: expected a JSON object'], receipt_path: null };
+  }
+
+  // Validate the four input fields (mirror validateVerifyReceipt shape rules).
+  if (!Array.isArray(input.testRuns) || input.testRuns.length === 0 || !input.testRuns.some((tr) => tr && tr.exitCode === 0)) {
+    blockers.push('receipt-input-test-runs: requires >=1 run with exitCode 0');
+  }
+  const cov = input.scenarioCoverage;
+  if (!cov || typeof cov !== 'object' || !(Number(cov.mapped) === Number(cov.total) && Number(cov.mapped) > 0)) {
+    blockers.push('receipt-input-scenario-coverage: mapped must equal total (>0)');
+  }
+  const design = input.designConsistency;
+  if (!design || typeof design !== 'object' || !Array.isArray(design.blockers) || design.blockers.length !== 0) {
+    blockers.push('receipt-input-design-consistency: blockers must be empty');
+  }
+  if (!input.userConfirmation || input.userConfirmation.received !== true) {
+    blockers.push('receipt-input-user-confirmation: received must be true');
+  }
+  if (blockers.length > 0) {
+    return { pass: false, blockers, receipt_path: null };
+  }
+
+  // Prerequisites must hold; never write a receipt for an unverified change.
+  const prereq = checkVerifyPrerequisites(cwd, changeName);
+  if (!prereq.pass) {
+    return { pass: false, blockers: prereq.blockers, receipt_path: null };
+  }
+
+  // Collect the final fingerprint only after all verify writes are complete.
+  const fp = collectWorktreeFingerprint(cwd, changeName);
+  if (!fp.ok) {
+    return { pass: false, blockers: [`fingerprint-collect-failed: ${fp.blocker}`], receipt_path: null };
+  }
+
+  const receipt = {
+    version: FINGERPRINT_VERSION,
+    change: changeName,
+    head: fp.head,
+    fingerprint: fp.value,
+    testRuns: input.testRuns,
+    scenarioCoverage: input.scenarioCoverage,
+    designConsistency: input.designConsistency,
+    userConfirmation: input.userConfirmation,
+  };
+
+  // Atomic write: same-directory temporary file, then renameSync.
+  const receiptPath = path.join(changeDir(cwd, changeName), 'verify-result.json');
+  const tmpPath = `${receiptPath}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    fs.writeFileSync(tmpPath, JSON.stringify(receipt, null, 2));
+    fs.renameSync(tmpPath, receiptPath);
+  } catch (e) {
+    return { pass: false, blockers: [`receipt-write-failed: ${errMsg(e)}`], receipt_path: null };
+  }
+
+  return { pass: true, blockers: [], receipt_path: receiptPath };
+}
+
+// ---- check-verify-ready ----
+
+function checkVerifyReady(cwd, changeName) {
+  const prereq = checkVerifyPrerequisites(cwd, changeName);
+  const receipt = validateVerifyReceipt(cwd, changeName);
+
+  const blockers = [...prereq.blockers, ...receipt.blockers];
+  return {
+    pass: blockers.length === 0,
+    checks: { ...prereq.checks, receipt_valid: receipt.pass },
+    blockers,
+    warnings: prereq.warnings || [],
+    receipt: receipt.receipt || null,
+  };
+}
+
+// ---- check-close-ready ----
+
+function checkCloseReady(cwd, changeName) {
+  const verifyReady = checkVerifyReady(cwd, changeName);
+  const amend = checkAmendCount(cwd, changeName);
+  const warnings = [...(verifyReady.warnings || [])];
+  if (amend.warning) warnings.push(amend.warning);
+  return {
+    pass: verifyReady.pass,
+    checks: verifyReady.checks,
+    blockers: verifyReady.blockers,
+    warnings,
+    amend_count: amend.amend_count,
+  };
+}
+
+// ---- archive-verified ----
+
+function archiveSnapshot(cwd) {
+  const changesDir = path.join(cwd, 'openspec', 'changes');
+  const archiveDir = path.join(changesDir, 'archive');
+  const list = (d) => {
+    try {
+      return fs.readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+    } catch { return []; }
+  };
+  return {
+    changes: new Set(list(changesDir).filter((n) => n !== 'archive')),
+    archive: new Set(list(archiveDir)),
+  };
+}
+
+function archiveVerified(cwd, changeName) {
+  const blockers = [];
+
+  // 1. Snapshot archive layout before invoking OpenSpec.
+  const before = archiveSnapshot(cwd);
+
+  // 2. Re-run checkVerifyReady immediately before archive (mutation gate).
+  const ready = checkVerifyReady(cwd, changeName);
+  if (!ready.pass) {
+    return { pass: false, blockers: ready.blockers, archived_to: null, checks: ready.checks };
+  }
+
+  // 3. Invoke `openspec archive <change> --yes` through the runner.
+  // 4. Require runner success.
+  try {
+    runOpenspec(cwd, ['archive', changeName, '--yes']);
+  } catch (e) {
+    return { pass: false, blockers: [`openspec-archive-failed: ${errMsg(e)}`], archived_to: null, checks: ready.checks };
+  }
+
+  // 5. Confirm the source change directory no longer exists.
+  if (exists(changeDir(cwd, changeName))) {
+    return { pass: false, blockers: ['archive-source-still-present'], archived_to: null, checks: ready.checks };
+  }
+
+  // 6. Exactly one newly-created archive directory from before/after snapshots.
+  const after = archiveSnapshot(cwd);
+  const newDirs = [...after.archive].filter((d) => !before.archive.has(d));
+  if (newDirs.length !== 1) {
+    return {
+      pass: false,
+      blockers: [`archive-dir-count: expected exactly 1 new archive dir, got ${newDirs.length}${newDirs.length ? ` (${newDirs.join(', ')})` : ''}`],
+      archived_to: null,
+      checks: ready.checks,
+    };
+  }
+  const archivedName = newDirs[0];
+  if (!new RegExp(`^\\d{4}-\\d{2}-\\d{2}-${changeName}$`).test(archivedName)) {
+    return {
+      pass: false,
+      blockers: [`archive-dir-name: ${archivedName} does not match YYYY-MM-DD-${changeName}`],
+      archived_to: null,
+      checks: ready.checks,
+    };
+  }
+
+  // 7. Confirm the retained archive directory carries tasks/lessons/receipt.
+  const archivedDir = path.join(cwd, 'openspec', 'changes', 'archive', archivedName);
+  for (const f of ['tasks.md', 'lessons.md', 'verify-result.json']) {
+    if (!exists(path.join(archivedDir, f))) {
+      return { pass: false, blockers: [`archive-missing-${f}`], archived_to: null, checks: ready.checks };
+    }
+  }
+
+  // 8. Only now remove the exact phase + building markers.
+  for (const m of ['.openflow/phase', '.openflow/building']) {
+    try { fs.rmSync(path.join(cwd, m), { force: true }); } catch { /* ignore */ }
+  }
+
+  return { pass: true, blockers: [], archived_to: archivedName, checks: ready.checks };
 }
 
 // ---- check-amend-count ----
@@ -1229,9 +1448,19 @@ function main() {
     return;
   }
 
-  if (!subcommand || !changeName) {
+  if (!subcommand) {
     process.stderr.write('Usage: openflow-gate.mjs <subcommand> <change-name>\n');
-    process.stderr.write('Subcommands: check-proposal, check-test-plan, check-cross-ref, check-build-done, check-close-ready, check-amend-count, check-writing-plans, check-brainstorming, check-test-framework, check-verify-issues, check-design-consistency\n');
+    process.stderr.write('Subcommands: check-proposal, check-test-plan, check-cross-ref, check-build-done, check-close-ready, check-amend-count, check-writing-plans, check-brainstorming, check-test-framework, check-verify-issues, check-design-consistency, check-verify-prerequisites, write-verify-receipt, check-verify-ready, archive-verified\n');
+    process.exit(1);
+  }
+
+  // Validate the change argument before any path construction or subprocess.
+  if (CHANGE_SUBCOMMANDS.has(subcommand) && !isValidChangeName(changeName)) {
+    process.stdout.write(JSON.stringify({
+      pass: false,
+      blockers: [`invalid-change-name: ${String(changeName)}`],
+      error: 'change name must match /^[a-z0-9]+(?:-[a-z0-9]+)*$/',
+    }, null, 2) + '\n');
     process.exit(1);
   }
 
@@ -1260,6 +1489,18 @@ function main() {
       break;
     case 'check-design-consistency':
       result = checkDesignConsistency(cwd, changeName);
+      break;
+    case 'check-verify-prerequisites':
+      result = checkVerifyPrerequisites(cwd, changeName);
+      break;
+    case 'write-verify-receipt':
+      result = writeVerifyReceipt(cwd, changeName, args[2]);
+      break;
+    case 'check-verify-ready':
+      result = checkVerifyReady(cwd, changeName);
+      break;
+    case 'archive-verified':
+      result = archiveVerified(cwd, changeName);
       break;
     default:
       process.stderr.write(`Unknown subcommand: ${subcommand}\n`);
