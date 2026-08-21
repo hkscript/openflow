@@ -304,7 +304,11 @@ run('amend 带 marker -> 合法，路由 amend', () => {
 
 console.log('\n[6] verify receipt routing');
 
-run('有效 receipt -> 路由 close', () => {
+// D1 review fix: receipt-driven verify/close routing applies ONLY to declared
+// verify/close phases. Every other declared phase (amend/spec/build) returns
+// its declared phase regardless of receipt validity/staleness.
+
+run('phase=verify + 有效 receipt -> 路由 close', () => {
   const dir = makeGitWorkspace('add-widget');
   write(dir, 'openspec/changes/add-widget/test-plan.md', TEST_PLAN_MIXED);
   write(dir, 'openspec/changes/add-widget/plan-ready.md', PLAN_READY_MIXED);
@@ -316,19 +320,96 @@ run('有效 receipt -> 路由 close', () => {
   assert.equal(json.suggested_phase, 'close');
 });
 
-run('stale receipt -> 路由 verify（phase 可路由时）', () => {
+run('phase=verify + stale receipt -> 仍路由 verify（re-verify）', () => {
+  const dir = makeGitWorkspace('add-widget');
+  write(dir, 'openspec/changes/add-widget/test-plan.md', TEST_PLAN_MIXED);
+  write(dir, 'openspec/changes/add-widget/plan-ready.md', PLAN_READY_MIXED);
+  setMarker(dir, 'add-widget');
+  setPhase(dir, { version: 1, change: 'add-widget', phase: 'verify' });
+  writeValidReceipt(dir, 'add-widget');
+  fs.appendFileSync(path.join(dir, 'src', 'app.js'), '// post-verify edit\n');
+  const json = runDetect(dir);
+  assert.equal(json.signals.verify_receipt.value.pass, false);
+  assert.ok(contradictionIds(json).includes('receipt-stale'));
+  assert.equal(json.suggested_phase, 'verify');
+});
+
+run('phase=amend + 有效 receipt -> 仍路由 amend（phase 权威）', () => {
+  const dir = makeGitWorkspace('add-widget');
+  setPhase(dir, { version: 1, change: 'add-widget', phase: 'amend' });
+  writeValidReceipt(dir, 'add-widget');
+  const json = runDetect(dir);
+  assert.equal(json.signals.verify_receipt.value.pass, true);
+  assert.equal(json.suggested_phase, 'amend'); // NOT close
+});
+
+run('phase=amend + stale receipt -> 仍路由 amend（phase 权威）', () => {
+  const dir = makeGitWorkspace('add-widget');
+  setPhase(dir, { version: 1, change: 'add-widget', phase: 'amend' });
+  writeValidReceipt(dir, 'add-widget');
+  fs.appendFileSync(path.join(dir, 'src', 'app.js'), '// stale\n');
+  const json = runDetect(dir);
+  assert.equal(json.signals.verify_receipt.value.pass, false);
+  assert.ok(contradictionIds(json).includes('receipt-stale'));
+  assert.equal(json.suggested_phase, 'amend'); // NOT verify
+});
+
+run('phase=spec + 有效 receipt -> 仍路由 spec（phase 权威）', () => {
+  const dir = makeGitWorkspace('add-widget');
+  setPhase(dir, { version: 1, change: 'add-widget', phase: 'spec' });
+  writeValidReceipt(dir, 'add-widget');
+  const json = runDetect(dir);
+  assert.equal(json.signals.verify_receipt.value.pass, true);
+  assert.equal(json.suggested_phase, 'spec');
+});
+
+run('phase=spec + stale receipt -> 仍路由 spec（phase 权威）', () => {
+  const dir = makeGitWorkspace('add-widget');
+  setPhase(dir, { version: 1, change: 'add-widget', phase: 'spec' });
+  writeValidReceipt(dir, 'add-widget');
+  fs.appendFileSync(path.join(dir, 'src', 'app.js'), '// stale\n');
+  const json = runDetect(dir);
+  assert.equal(json.signals.verify_receipt.value.pass, false);
+  assert.ok(contradictionIds(json).includes('receipt-stale'));
+  assert.equal(json.suggested_phase, 'spec');
+});
+
+run('phase=build/task-build + 有效 receipt -> 仍路由 build（phase 权威）', () => {
   const dir = makeGitWorkspace('add-widget');
   write(dir, 'openspec/changes/add-widget/test-plan.md', TEST_PLAN_MIXED);
   write(dir, 'openspec/changes/add-widget/plan-ready.md', PLAN_READY_MIXED);
   setMarker(dir, 'add-widget');
   setPhase(dir, { version: 1, change: 'add-widget', phase: 'build', mode: 'task-build', task: '1' });
   writeValidReceipt(dir, 'add-widget');
-  // mutate a tracked file AFTER the receipt -> fingerprint changes -> stale
+  const json = runDetect(dir);
+  assert.equal(json.signals.verify_receipt.value.pass, true);
+  assert.equal(json.suggested_phase, 'build'); // NOT close
+});
+
+run('phase=build/task-build + stale receipt -> 仍路由 build（phase 权威）', () => {
+  const dir = makeGitWorkspace('add-widget');
+  write(dir, 'openspec/changes/add-widget/test-plan.md', TEST_PLAN_MIXED);
+  write(dir, 'openspec/changes/add-widget/plan-ready.md', PLAN_READY_MIXED);
+  setMarker(dir, 'add-widget');
+  setPhase(dir, { version: 1, change: 'add-widget', phase: 'build', mode: 'task-build', task: '1' });
+  writeValidReceipt(dir, 'add-widget');
   fs.appendFileSync(path.join(dir, 'src', 'app.js'), '// post-verify edit\n');
   const json = runDetect(dir);
   assert.equal(json.signals.verify_receipt.value.pass, false);
   assert.ok(contradictionIds(json).includes('receipt-stale'));
-  assert.equal(json.suggested_phase, 'verify');
+  assert.equal(json.suggested_phase, 'build'); // NOT verify
+});
+
+run('phase=close + 有效 receipt -> 路由 close', () => {
+  const dir = makeGitWorkspace('add-widget');
+  write(dir, 'openspec/changes/add-widget/test-plan.md', TEST_PLAN_MIXED);
+  write(dir, 'openspec/changes/add-widget/plan-ready.md', PLAN_READY_MIXED);
+  setMarker(dir, 'add-widget');
+  setPhase(dir, { version: 1, change: 'add-widget', phase: 'close' });
+  writeValidReceipt(dir, 'add-widget');
+  const json = runDetect(dir);
+  assert.equal(json.signals.verify_receipt.value.pass, true);
+  assert.equal(json.suggested_phase, 'close');
 });
 
 run('close 阶段带无效(malformed) receipt -> 矛盾 + 不自动建议 close', () => {

@@ -570,9 +570,11 @@ function detectContradictions(signals, changeName) {
 // ---- phase suggester ----
 
 function suggestPhase(signals, contradictions, changeCount, phaseState, receipt) {
-  // Phase-first routing: a valid `.openflow/phase` is authoritative. A stale
-  // receipt routes to `verify` when the phase is otherwise routable; a phase
-  // explicitly set to `close` with a stale/missing receipt blocks auto-close.
+  // Phase-first routing: a valid `.openflow/phase` is authoritative. Receipt
+  // driven verify/close routing applies ONLY to declared `verify`/`close`
+  // phases; every other declared phase (proposal/brainstorming/spec/amend/
+  // build) returns its declared phase regardless of receipt state, unless a
+  // separately-specified blocking contradiction exists.
   if (phaseState && phaseState.state) {
     const st = phaseState.state;
 
@@ -586,7 +588,7 @@ function suggestPhase(signals, contradictions, changeCount, phaseState, receipt)
       };
     }
 
-    // close phase requires a current verify receipt.
+    // close phase requires a current verify receipt (invalid receipt blocks).
     if (st.phase === 'close') {
       if (receipt && receipt.pass === true) {
         return { phase: 'close', reason: 'phase_close_receipt_current' };
@@ -598,22 +600,25 @@ function suggestPhase(signals, contradictions, changeCount, phaseState, receipt)
       };
     }
 
-    // stale receipt routes to verify when the phase is otherwise routable.
-    if (
-      receipt
-      && receipt.pass === false
-      && Array.isArray(receipt.blockers)
-      && receipt.blockers.some((b) => b.includes('stale'))
-    ) {
-      return { phase: 'verify', reason: 'receipt_stale', note: 'verify receipt 已过期，需重新 verify' };
+    // verify phase: receipt drives the verify → close transition; a stale
+    // receipt keeps the phase at verify (re-verify).
+    if (st.phase === 'verify') {
+      if (receipt && receipt.pass === true) {
+        return { phase: 'close', reason: 'receipt_current' };
+      }
+      if (
+        receipt
+        && receipt.pass === false
+        && Array.isArray(receipt.blockers)
+        && receipt.blockers.some((b) => b.includes('stale'))
+      ) {
+        return { phase: 'verify', reason: 'receipt_stale', note: 'verify receipt 已过期，需重新 verify' };
+      }
+      return { phase: 'verify', reason: 'phase_state' };
     }
 
-    // valid current receipt → close.
-    if (receipt && receipt.pass === true) {
-      return { phase: 'close', reason: 'receipt_current' };
-    }
-
-    // otherwise route to the declared phase.
+    // All other declared phases are phase-authoritative: the declared phase is
+    // returned even when a current or stale receipt exists.
     return { phase: st.phase, reason: 'phase_state' };
   }
 
