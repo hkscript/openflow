@@ -360,6 +360,34 @@ if (!fs.existsSync(DIST_RULES) || !fs.existsSync(DIST_OPENCODE)) {
       operation: 'write', filePath: 'src/legacy.ts', content: 'impl',
     },
     {
+      name: 'task-build pytest TODO stub (template example)',
+      setup: (dir) => {
+        setupBuildPhase(dir, 'task-build', '1');
+        writeRel(dir, 'openspec/changes/add-widget/test-plan.md', 'T-001: `tests/test_login.py::test_login_with_valid_credentials`');
+        writeRel(dir, 'openspec/changes/add-widget/plan-ready.md', [
+          '### Task 1: login',
+          '- Test cases: T-001',
+          '- Files: `src/login.py`, `tests/test_login.py`',
+        ].join('\n'));
+        writeRel(dir, 'tests/test_login.py', 'def test_login_with_valid_credentials():\n    assert False, "TODO: implement"\n');
+      },
+      operation: 'write', filePath: 'src/login.py', content: 'def login():\n    return True\n',
+    },
+    {
+      name: 'task-build pytest completed (template example)',
+      setup: (dir) => {
+        setupBuildPhase(dir, 'task-build', '1');
+        writeRel(dir, 'openspec/changes/add-widget/test-plan.md', 'T-001: `tests/test_login.py::test_login_with_valid_credentials` ✅ PASS');
+        writeRel(dir, 'openspec/changes/add-widget/plan-ready.md', [
+          '### Task 1: login',
+          '- Test cases: T-001',
+          '- Files: `src/login.py`, `tests/test_login.py`',
+        ].join('\n'));
+        writeRel(dir, 'tests/test_login.py', 'def test_login_with_valid_credentials():\n    assert login() == True\n');
+      },
+      operation: 'write', filePath: 'src/login.py', content: 'def login():\n    return True\n',
+    },
+    {
       name: 'task-build ambiguous legacy #3',
       setup: (dir) => setupBuildPhase(dir, 'task-build', '3'),
       operation: 'write', filePath: 'src/amb.ts', content: 'impl',

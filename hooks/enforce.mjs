@@ -444,26 +444,49 @@ function isSelectorRegionUnfinished(content, sel) {
   const lines = content.split('\n');
   let start = -1;
   if (name.startsWith('@openflow(')) {
+    // marker-region form: locate the documented marker token
     for (let i = 0; i < lines.length; i++) {
       if (lines[i].includes(name)) { start = i; break; }
     }
   } else {
+    // Language-neutral declaration recognition (Task 7 re-review): Jest
+    // test/it/describe('name'), Python `def test_name():`, Go `func TestName()`,
+    // Rust `#[test] fn test_name()`, and JUnit `@Test` method. Selector forms
+    // none of these recognize must use the `@openflow(T-001)` marker region.
     const esc = escapeRegExp(name);
-    const declRe = new RegExp(`\\b(test|it|describe)(?:\\.\\w+)?\\s*\\(\\s*['"\`]${esc}['"\`]`);
+    const declPatterns = [
+      new RegExp(`\\b(?:test|it|describe)(?:\\.\\w+)?\\s*\\(\\s*['"\`]${esc}['"\`]`),
+      new RegExp(`\\bdef\\s+${esc}\\s*\\(`),
+      new RegExp(`\\bfunc\\s+${esc}\\s*\\(`),
+      new RegExp(`\\bfn\\s+${esc}\\s*\\(`),
+      // JUnit/Java method: return type + name(`void testLogin()`, `String foo()`…)
+      new RegExp(`\\b(?:void|boolean|int|long|float|double|char|byte|short|String|Object|List|Map|Set|[A-Z][\\w<>\\[\\], ]*)\\s+${esc}\\s*\\(`),
+    ];
+    const nameCallRe = new RegExp(`\\b${esc}\\s*\\(`);
     for (let i = 0; i < lines.length; i++) {
-      if (declRe.test(lines[i])) { start = i; break; }
+      const line = lines[i];
+      for (const p of declPatterns) {
+        if (p.test(line)) { start = i; break; }
+      }
+      if (start !== -1) break;
+      // JUnit `@Test` annotation whose method declaration is on this/next line.
+      if (/@Test\b/.test(line) && (nameCallRe.test(line) || nameCallRe.test(lines[i + 1] || ''))) {
+        start = i;
+        break;
+      }
     }
   }
-  if (start === -1) return true;
+  if (start === -1) return true; // cannot establish exact location -> conservative block
   let end = lines.length;
+  const nextDeclRe = /(?:^|\s)(?:test|it|describe)\s*\(|^\s*(?:async\s+)?def\s+\w+\s*\(|^\s*fn\s+\w+\s*\(|^\s*func\s+Test\w*\s*\(|@Test\b|#\[test\]/;
   for (let i = start + 1; i < lines.length; i++) {
-    if (/(^|\s)(test|it|describe)\s*\(/.test(lines[i])) {
+    if (nextDeclRe.test(lines[i])) {
       end = i;
       break;
     }
   }
   const region = lines.slice(start, end).join('\n');
-  return /TODO|FAIL|assert\s*\(\s*false|pending\s*\(/.test(region);
+  return /TODO|FAIL|assert\s*\(\s*false|assert\s+False\b|pending\s*\(/.test(region);
 }
 
 function runTaskBuildTdd(state, relPath, cwd) {

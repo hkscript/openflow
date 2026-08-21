@@ -154,6 +154,7 @@ openspec validate <变更名> --strict
 3. 测试内容从 scenario 描述推导（给定条件 → test setup，期望结果 → assertion）
 4. 测试文件路径根据项目约定自动推断（见下方）
 5. 初始状态：稳定行**不带状态后缀**（= 未开始）；build 阶段逐行在行尾追加状态后缀
+6. **选择器必须能被 enforcement 识别**：常见声明形式（Jest `test('…')`/`it('…')`/`describe('…')`、Python `def test_…():`、Go `func Test…()`、Rust `#[test] fn test_…()`、JUnit `@Test` 方法）直接可用。**不支持的声明形式改用 marker 区域选择器**：`<测试文件>::@openflow(T-001)`，并在测试文件对应测试体内放置 `@openflow(T-001)` 标记——否则 task-build 会因无法定位选择器区域而 fail-closed
 
 `openspec/changes/<变更名>/test-plan.md` 格式（**稳定行是唯一事实来源**，enforcement / Gate / detect 都逐行解析它；不要靠额外的表格当事实来源）：
 

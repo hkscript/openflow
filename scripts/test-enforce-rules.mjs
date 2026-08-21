@@ -613,6 +613,104 @@ console.log('\n[5] runAllChecks 阶段策略与选择器隔离');
   });
 }
 {
+  // 5j. language-neutral selector recognition (Task 7 re-review). The spec
+  // template's pytest example (`tests/...::test_login_with_valid_credentials`
+  // + `def test_login_with_valid_credentials():`) must not deadlock task-build.
+  // Python: a real TODO stub blocks, a completed test permits the impl write;
+  // Go func TestName / Rust #[test] fn / JUnit @Test methods also resolve.
+  const PY_TP = 'T-001: `tests/test_login.py::test_login_with_valid_credentials`';
+  const PY_PR = [
+    '### Task 1: login',
+    '- Test cases: T-001',
+    '- Files: `src/login.py`, `tests/test_login.py`',
+  ].join('\n');
+  function pyFixture(completed) {
+    const dir = tmpdir();
+    const cd = makeChange(dir);
+    write(cd, 'test-plan.md', PY_TP + (completed ? ' ✅ PASS' : ''));
+    write(cd, 'plan-ready.md', PY_PR);
+    writePhase(dir, { version: 1, change: 'add-widget', phase: 'build', mode: 'task-build', task: '1' });
+    write(dir, 'tests/test_login.py', completed
+      ? 'def test_login_with_valid_credentials():\n    assert login() == True\n'
+      : 'def test_login_with_valid_credentials():\n    # TODO: implement\n    assert False, "TODO: implement"\n');
+    return dir;
+  }
+  run('Python pytest TODO 桩 -> block tdd-stub-check（模板示例 RED）', () => {
+    const input = { operation: 'write', filePath: 'src/login.py', content: 'def login():\n    return True\n', cwd: pyFixture(false) };
+    const rs = rules.runAllChecks(input);
+    assert.ok(rs.some((r) => r.level === 'block' && r.id === 'tdd-stub-check'), JSON.stringify(rs));
+  });
+  run('Python pytest 完成 -> 生产写放行（模板示例 GREEN）', () => {
+    const input = { operation: 'write', filePath: 'src/login.py', content: 'def login():\n    return True\n', cwd: pyFixture(true) };
+    const rs = rules.runAllChecks(input);
+    assert.ok(!rs.some((r) => r.level === 'block'), JSON.stringify(rs));
+  });
+  run('Go func TestName 完成 -> 生产写放行', () => {
+    const dir = tmpdir();
+    const cd = makeChange(dir);
+    write(cd, 'test-plan.md', 'T-001: `src/login_test.go::TestLoginWithValidCredentials`');
+    write(cd, 'plan-ready.md', [
+      '### Task 1: login',
+      '- Test cases: T-001',
+      '- Files: `src/login.go`, `src/login_test.go`',
+    ].join('\n'));
+    writePhase(dir, { version: 1, change: 'add-widget', phase: 'build', mode: 'task-build', task: '1' });
+    write(dir, 'src/login_test.go', [
+      'func TestLoginWithValidCredentials(t *testing.T) {',
+      '    if !login() { t.Fatal("login failed") }',
+      '}',
+      '',
+    ].join('\n'));
+    const input = { operation: 'write', filePath: 'src/login.go', content: 'func login() bool { return true }\n', cwd: dir };
+    const rs = rules.runAllChecks(input);
+    assert.ok(!rs.some((r) => r.level === 'block'), JSON.stringify(rs));
+  });
+  run('Rust #[test] fn 完成 -> 生产写放行', () => {
+    const dir = tmpdir();
+    const cd = makeChange(dir);
+    write(cd, 'test-plan.md', 'T-001: `src/login_test.rs::test_login`');
+    write(cd, 'plan-ready.md', [
+      '### Task 1: login',
+      '- Test cases: T-001',
+      '- Files: `src/login.rs`, `src/login_test.rs`',
+    ].join('\n'));
+    writePhase(dir, { version: 1, change: 'add-widget', phase: 'build', mode: 'task-build', task: '1' });
+    write(dir, 'src/login_test.rs', [
+      '#[test]',
+      'fn test_login() {',
+      '    assert!(login());',
+      '}',
+      '',
+    ].join('\n'));
+    const input = { operation: 'write', filePath: 'src/login.rs', content: 'fn login() -> bool { true }\n', cwd: dir };
+    const rs = rules.runAllChecks(input);
+    assert.ok(!rs.some((r) => r.level === 'block'), JSON.stringify(rs));
+  });
+  run('JUnit @Test 方法完成 -> 生产写放行', () => {
+    const dir = tmpdir();
+    const cd = makeChange(dir);
+    write(cd, 'test-plan.md', 'T-001: `src/LoginTest.java::testLogin`');
+    write(cd, 'plan-ready.md', [
+      '### Task 1: login',
+      '- Test cases: T-001',
+      '- Files: `src/Login.java`, `src/LoginTest.java`',
+    ].join('\n'));
+    writePhase(dir, { version: 1, change: 'add-widget', phase: 'build', mode: 'task-build', task: '1' });
+    write(dir, 'src/LoginTest.java', [
+      'public class LoginTest {',
+      '    @Test',
+      '    void testLogin() {',
+      '        assertTrue(login());',
+      '    }',
+      '}',
+      '',
+    ].join('\n'));
+    const input = { operation: 'write', filePath: 'src/Login.java', content: 'class Login { boolean login() { return true; } }\n', cwd: dir };
+    const rs = rules.runAllChecks(input);
+    assert.ok(!rs.some((r) => r.level === 'block'), JSON.stringify(rs));
+  });
+}
+{
   // 5i. proposal / verify / close 阶段边界
   const dir = makeSelectorWorkspace();
   writePhase(dir, { version: 1, change: 'add-widget', phase: 'proposal' });

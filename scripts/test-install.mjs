@@ -667,46 +667,45 @@ await run('canonical plan/test-plan → 已安装 detect 统计 PASS/TODO（F1�
   assert.equal(stats.total, 2, JSON.stringify(stats));
 });
 
-await run('canonical 状态后缀行 → 已安装 enforce 当前任务选择器解析（F2）', () => {
+await run('canonical 状态后缀行 → 已安装 enforce 当前任务选择器解析（F2，pytest 模板示例）', () => {
   const { proj } = makeRuntimeFixture();
-  // 与 spec.md 模板一致的 status-bearing 稳定行（选择器是 jest 风格 test() 声明，
-  // 与 enforcement 的 selector-region 识别一致）。行尾 ✅ PASS 后缀不得破坏解析。
+  // spec.md 模板的 pytest 示例：`tests/...::test_login_with_valid_credentials` +
+  // `def test_login_with_valid_credentials():`。状态后缀 `✅ PASS` 不得破坏解析，
+  // pytest 声明必须被 language-neutral 选择器识别（re-review）。
   const base = 'openspec/changes/add-widget';
   write(proj, `${base}/test-plan.md`, [
-    'T-001: `tests/auth/login.test.ts::valid credentials` ✅ PASS',
-    'T-002: `tests/auth/login.test.ts::wrong password` ⬜ TODO',
+    'T-001: `tests/auth/test_login.py::test_login_with_valid_credentials` ✅ PASS',
+    'T-002: `tests/auth/test_login.py::test_login_with_wrong_password` ⬜ TODO',
   ].join('\n'));
   write(proj, `${base}/plan-ready.md`, [
     '### Task 1: login',
     '- Test cases: T-001, T-002',
-    '- Files: `src/auth/login.ts`, `tests/auth/login.test.ts`',
+    '- Files: `src/auth/login.py`, `tests/auth/test_login.py`',
     '- [x] 实现登录',
     '',
   ].join('\n'));
-  write(proj, 'tests/auth/login.test.ts', [
-    "test('valid credentials', () => {",
-    '  expect(login()).toBe(true);',
-    '});',
+  write(proj, 'tests/auth/test_login.py', [
+    'def test_login_with_valid_credentials():',
+    '    assert login() == True',
     '',
-    "test('wrong password', () => {",
-    '  expect(login()).toBe(false);',
-    '});',
+    'def test_login_with_wrong_password():',
+    '    assert login() == False',
   ].join('\n'));
-  write(proj, 'src/auth/login.ts', 'export function login(): boolean { return true; }\n');
+  write(proj, 'src/auth/login.py', 'def login():\n    return True\n');
   write(proj, '.openflow/phase', JSON.stringify({ version: 1, change: 'add-widget', phase: 'build', mode: 'task-build', task: '1' }));
   write(proj, '.openflow/building', 'add-widget');
   const hook = path.join(proj, '.claude', 'hooks', 'openflow-enforce.mjs');
-  // 写 task 声明的实现文件 → 不阻断（证明状态后缀行被正确解析为选择器映射）
+  // 写 task 声明的实现文件 → 不阻断（证明状态后缀行 + pytest def 声明都被正确解析）
   const okRes = spawnSync(process.execPath, [hook], {
     cwd: proj,
-    input: JSON.stringify({ tool_name: 'Write', file_path: 'src/auth/login.ts', content: 'export function login(): boolean { return true; }\n' }),
+    input: JSON.stringify({ tool_name: 'Write', file_path: 'src/auth/login.py', content: 'def login():\n    return True\n' }),
     encoding: 'utf8',
   });
   assert.equal(okRes.status, 0, `declared write blocked: ${okRes.stdout}`);
   // 写未声明文件 → phase-boundary 阻断
   const badRes = spawnSync(process.execPath, [hook], {
     cwd: proj,
-    input: JSON.stringify({ tool_name: 'Write', file_path: 'src/auth/undeclared.ts', content: 'x' }),
+    input: JSON.stringify({ tool_name: 'Write', file_path: 'src/auth/undeclared.py', content: 'x' }),
     encoding: 'utf8',
   });
   assert.equal(badRes.status, 1, 'undeclared write not blocked');
