@@ -14,6 +14,83 @@
 import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
+import { validateVerifyReceipt } from './lifecycle-fingerprint.mjs';
+
+// ---- phase state contract (mirrors src/enforce/rules.ts / hooks/enforce.mjs) ----
+
+const PHASE_NAMES = new Set([
+  'proposal', 'brainstorming', 'spec', 'amend', 'build', 'verify', 'close',
+]);
+const CHANGE_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+function isDir(p) {
+  try {
+    return fs.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Read and validate `.openflow/phase`.
+ * @returns {{state: object|null, error: string|null}} — absent file = both null.
+ */
+function readPhaseState(cwd) {
+  const phaseFile = path.join(cwd, '.openflow', 'phase');
+  const raw = safeRead(phaseFile);
+  if (raw === null) return { state: null, error: null };
+
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return { state: null, error: '.openflow/phase 不是合法 JSON' };
+  }
+  if (!data || typeof data !== 'object') {
+    return { state: null, error: '.openflow/phase 必须是 JSON 对象' };
+  }
+  const obj = data;
+
+  if (obj.version !== 1) return { state: null, error: `不支持的 version: ${String(obj.version)}` };
+  const change = typeof obj.change === 'string' ? obj.change : '';
+  if (!CHANGE_NAME_RE.test(change)) return { state: null, error: `非法 change 名: ${change}` };
+  const phase = typeof obj.phase === 'string' ? obj.phase : '';
+  if (!PHASE_NAMES.has(phase)) return { state: null, error: `非法 phase: ${phase}` };
+
+  const activeDir = path.join(cwd, 'openspec', 'changes', change);
+  const archiveDir = path.join(cwd, 'openspec', 'changes', 'archive', change);
+  const hasActive = isDir(activeDir);
+  const hasArchive = isDir(archiveDir);
+  if (!hasActive) {
+    return { state: null, error: hasArchive ? `change 已归档: ${change}` : `active change 目录缺失: ${change}` };
+  }
+
+  if ('mode' in obj && typeof obj.mode !== 'string') {
+    return { state: null, error: `mode 必须是字符串: ${String(obj.mode)}` };
+  }
+  if ('task' in obj && typeof obj.task !== 'string') {
+    return { state: null, error: `task 必须是字符串: ${String(obj.task)}` };
+  }
+  const modeRaw = typeof obj.mode === 'string' ? obj.mode : undefined;
+  const taskRaw = typeof obj.task === 'string' ? obj.task : undefined;
+
+  if (phase === 'build') {
+    if (modeRaw === undefined) return { state: null, error: 'build 阶段缺少 mode' };
+    if (modeRaw !== 'bootstrap' && modeRaw !== 'task-build') return { state: null, error: `非法 build mode: ${modeRaw}` };
+    if (modeRaw === 'bootstrap') {
+      if (taskRaw !== undefined) return { state: null, error: 'bootstrap 不允许携带 task' };
+      return { state: { version: 1, change, phase, mode: 'bootstrap' }, error: null };
+    }
+    if (taskRaw === undefined) return { state: null, error: 'task-build 缺少 task' };
+    if (!/^\d+$/.test(taskRaw)) return { state: null, error: `非法 task: ${taskRaw}` };
+    return { state: { version: 1, change, phase, mode: 'task-build', task: taskRaw }, error: null };
+  }
+
+  if (modeRaw !== undefined || taskRaw !== undefined) {
+    return { state: null, error: `非 build phase 不允许携带 mode/task: ${phase}` };
+  }
+  return { state: { version: 1, change, phase }, error: null };
+}
 
 // ---- helpers ----
 
@@ -247,6 +324,8 @@ function collectLessons(changeDir) {
 
 const RELIABILITY = {
   active_changes: 'high',
+  phase_state: 'high',
+  verify_receipt: 'high',
   test_plan: 'high',
   test_plan_stats: 'high',
   plan_ready: 'high',
@@ -258,6 +337,140 @@ const RELIABILITY = {
   verify_issues: 'medium',
   lessons: 'low',
 };
+
+// Phase-state contradictions that must block automatic routing (a valid
+// `.openflow/phase` overrides mtime selection, but a contradictory phase /
+// marker / receipt state requires explicit user resolution).
+const BLOCKING_PHASE_IDS = new Set([
+  'phase-state-invalid',
+  'phase-target-missing',
+  'phase-target-archived',
+  'bootstrap-production-conflict',
+  'task-build-missing-artifacts',
+  'marker-mismatch',
+  'close-without-current-receipt',
+]);
+
+/**
+ * Detect contradictions between `.openflow/phase`, the building marker, and the
+ * active change's verify receipt. Structured entries carry an `id` so consumers
+ * can distinguish blocking phase problems from advisory receipt staleness.
+ */
+function detectPhaseContradictions(cwd, phaseState, signals) {
+  const out = [];
+  const st = phaseState && phaseState.state;
+
+  // Invalid / missing / archived phase target.
+  if (!st) {
+    if (phaseState && phaseState.error) {
+      const err = phaseState.error;
+      let id = 'phase-state-invalid';
+      if (err.includes('已归档')) id = 'phase-target-archived';
+      else if (err.includes('目录缺失')) id = 'phase-target-missing';
+      out.push({
+        id,
+        phase: null,
+        change: null,
+        detail: err,
+        resolution: '修复或清除 .openflow/phase 后再继续。',
+        positive: [],
+        negative: [`phase_state: ${err}`],
+      });
+    }
+    return out;
+  }
+
+  const markerRaw = safeRead(path.join(cwd, '.openflow', 'building'));
+  const markerChange = markerRaw ? markerRaw.trim() : '';
+  const markerExists = markerRaw !== null;
+
+  // Marker / phase change mismatch.
+  if (markerExists && markerChange.length > 0 && markerChange !== st.change) {
+    out.push({
+      id: 'marker-mismatch',
+      phase: st.phase,
+      change: st.change,
+      detail: `.openflow/building 指向 "${markerChange}"，与 phase change "${st.change}" 不一致`,
+      resolution: '修正 .openflow/building 使 marker 与 phase change 一致。',
+      positive: [],
+      negative: [`building_marker: ${markerChange}`],
+    });
+  }
+
+  // Build mode requirements.
+  if (st.phase === 'build' && st.mode === 'bootstrap' && !markerExists) {
+    out.push({
+      id: 'bootstrap-production-conflict',
+      phase: 'build',
+      mode: 'bootstrap',
+      change: st.change,
+      detail: 'bootstrap 阶段缺少 .openflow/building marker，生产态与 build 上下文冲突',
+      resolution: '进入 build/bootstrap 需先写入 .openflow/building。',
+      positive: [],
+      negative: ['building_marker: missing'],
+    });
+  }
+  if (st.phase === 'build' && st.mode === 'task-build') {
+    const missing = [];
+    if (!markerExists) missing.push('.openflow/building marker');
+    if (!exists(path.join(cwd, 'openspec', 'changes', st.change, 'test-plan.md'))) missing.push('test-plan.md');
+    if (!exists(path.join(cwd, 'openspec', 'changes', st.change, 'plan-ready.md'))) missing.push('plan-ready.md');
+    if (missing.length > 0) {
+      out.push({
+        id: 'task-build-missing-artifacts',
+        phase: 'build',
+        mode: 'task-build',
+        change: st.change,
+        detail: `task-build 缺少: ${missing.join(', ')}`,
+        resolution: '补齐 marker / test-plan.md / plan-ready.md 后再继续。',
+        positive: [],
+        negative: missing.map((m) => `missing: ${m}`),
+      });
+    }
+  }
+
+  // Verify receipt contradictions.
+  const receipt = signals.verify_receipt && signals.verify_receipt.value;
+  if (receipt && receipt.pass === false) {
+    const blockers = receipt.blockers || [];
+    const isStale = blockers.some((b) => b.includes('stale'));
+    const isMalformed = blockers.some((b) => b.includes('invalid') || b.includes('mismatch'));
+    if (isStale) {
+      out.push({
+        id: 'receipt-stale',
+        phase: st.phase,
+        change: st.change,
+        detail: `verify receipt 已过期: ${blockers.join(', ')}`,
+        resolution: '重新运行 /openflow verify 刷新 receipt。',
+        positive: [],
+        negative: [`verify_receipt: ${blockers.join(', ')}`],
+      });
+    } else if (isMalformed) {
+      out.push({
+        id: 'receipt-malformed',
+        phase: st.phase,
+        change: st.change,
+        detail: `verify receipt 格式非法: ${blockers.join(', ')}`,
+        resolution: '修复或删除 verify-result.json 后重新 verify。',
+        positive: [],
+        negative: [`verify_receipt: ${blockers.join(', ')}`],
+      });
+    }
+    if (st.phase === 'close') {
+      out.push({
+        id: 'close-without-current-receipt',
+        phase: 'close',
+        change: st.change,
+        detail: 'close 阶段缺少当前有效的 verify receipt',
+        resolution: '先运行 /openflow verify 获得当前 receipt 再 close。',
+        positive: [],
+        negative: [`verify_receipt: ${blockers.join(', ')}`],
+      });
+    }
+  }
+
+  return out;
+}
 
 function detectContradictions(signals, changeName) {
   const contradictions = [];
@@ -356,7 +569,62 @@ function detectContradictions(signals, changeName) {
 
 // ---- phase suggester ----
 
-function suggestPhase(signals, contradictions, changeCount) {
+function suggestPhase(signals, contradictions, changeCount, phaseState, receipt) {
+  // Phase-first routing: a valid `.openflow/phase` is authoritative. A stale
+  // receipt routes to `verify` when the phase is otherwise routable; a phase
+  // explicitly set to `close` with a stale/missing receipt blocks auto-close.
+  if (phaseState && phaseState.state) {
+    const st = phaseState.state;
+
+    // Blocking phase/marker contradictions → no automatic routing.
+    const blocking = contradictions.filter((c) => c.id && BLOCKING_PHASE_IDS.has(c.id));
+    if (blocking.length > 0) {
+      return {
+        phase: null,
+        reason: 'phase_state_conflict',
+        note: `phase/marker 状态矛盾: ${blocking.map((b) => b.id).join(', ')}，需用户确认`,
+      };
+    }
+
+    // close phase requires a current verify receipt.
+    if (st.phase === 'close') {
+      if (receipt && receipt.pass === true) {
+        return { phase: 'close', reason: 'phase_close_receipt_current' };
+      }
+      return {
+        phase: null,
+        reason: 'phase_close_without_receipt',
+        note: 'close 阶段需要当前 verify receipt，请先重新 verify',
+      };
+    }
+
+    // stale receipt routes to verify when the phase is otherwise routable.
+    if (
+      receipt
+      && receipt.pass === false
+      && Array.isArray(receipt.blockers)
+      && receipt.blockers.some((b) => b.includes('stale'))
+    ) {
+      return { phase: 'verify', reason: 'receipt_stale', note: 'verify receipt 已过期，需重新 verify' };
+    }
+
+    // valid current receipt → close.
+    if (receipt && receipt.pass === true) {
+      return { phase: 'close', reason: 'receipt_current' };
+    }
+
+    // otherwise route to the declared phase.
+    return { phase: st.phase, reason: 'phase_state' };
+  }
+
+  // Invalid / missing / archived phase target → contradiction already reported,
+  // no automatic routing.
+  if (phaseState && phaseState.error) {
+    return { phase: null, reason: 'phase_state_invalid', note: phaseState.error };
+  }
+
+  // ---- phase absent: original signal-based heuristic (preserved) ----
+
   // If contradictions exist, don't auto-route
   if (contradictions.length > 0) {
     return { phase: null, reason: 'signal_contradiction', note: 'Signals contradict — requires user confirmation.' };
@@ -408,9 +676,14 @@ function main() {
   const cwd = process.cwd();
   const changes = collectActiveChanges(cwd);
 
+  // Read and validate `.openflow/phase`.
+  const phaseState = readPhaseState(cwd);
+
   // Build signal structure
   const signals = {
     active_changes: { value: changes.map(c => c.name), reliability: 'high' },
+    phase_state: { value: phaseState.state, error: phaseState.error, reliability: 'high' },
+    verify_receipt: { value: null, reliability: 'high' },
     test_plan: null,
     test_plan_stats: null,
     plan_ready: null,
@@ -423,22 +696,30 @@ function main() {
     lessons: null,
   };
 
-  // If there's exactly one change, collect detailed signals
-  let primaryChange = changes.length === 1 ? changes[0] : null;
-  if (changes.length > 1) {
-    // Try to find the most recently modified change
-    let latest = null;
-    let latestTime = 0;
-    for (const c of changes) {
-      try {
-        const stat = fs.statSync(c.path);
-        if (stat.mtimeMs > latestTime) {
-          latestTime = stat.mtimeMs;
-          latest = c;
-        }
-      } catch {}
+  // Phase-first selection: a valid phase names an active change and wins over
+  // mtime-derived candidates.
+  let primaryChange = null;
+  if (phaseState.state) {
+    primaryChange = changes.find((c) => c.name === phaseState.state.change) || null;
+  }
+  if (!primaryChange) {
+    if (changes.length === 1) {
+      primaryChange = changes[0];
+    } else if (changes.length > 1) {
+      // Try to find the most recently modified change
+      let latest = null;
+      let latestTime = 0;
+      for (const c of changes) {
+        try {
+          const stat = fs.statSync(c.path);
+          if (stat.mtimeMs > latestTime) {
+            latestTime = stat.mtimeMs;
+            latest = c;
+          }
+        } catch {}
+      }
+      primaryChange = latest;
     }
-    primaryChange = latest;
   }
 
   if (primaryChange) {
@@ -464,17 +745,38 @@ function main() {
     };
     signals.verify_issues = { value: collectVerifyIssues(cd), reliability: 'medium' };
     signals.lessons = { value: collectLessons(cd), reliability: 'low' };
+
+    signals.verify_receipt = {
+      value: validateVerifyReceipt(cwd, primaryChange.name),
+      reliability: 'high',
+    };
   }
 
-  // Detect contradictions
+  // Detect contradictions (signal-based + phase/marker/receipt based)
   const contradictions = detectContradictions(signals, primaryChange?.name ?? '');
+  contradictions.push(...detectPhaseContradictions(cwd, phaseState, signals));
 
   // Suggest phase
-  const suggestion = suggestPhase(signals, contradictions, changes.length);
+  const suggestion = suggestPhase(
+    signals,
+    contradictions,
+    changes.length,
+    phaseState,
+    signals.verify_receipt?.value
+  );
 
   // Build human summary
   let humanSummary = '';
-  if (changes.length === 0) {
+  const st = phaseState.state;
+  if (st) {
+    const parts = [`phase ${st.phase}${st.mode ? `/${st.mode}` : ''} @ ${st.change}`];
+    const rv = signals.verify_receipt?.value;
+    if (rv && rv.pass) parts.push('receipt 有效');
+    else if (rv) parts.push('无有效 receipt');
+    if (contradictions.length > 0) parts.push(`⚠️ ${contradictions.length} 项矛盾，需确认`);
+    else parts.push(`建议 ${suggestion.phase}`);
+    humanSummary = parts.join(', ') + '。';
+  } else if (changes.length === 0) {
     humanSummary = '无活跃变更。建议 proposal 阶段。';
   } else if (changes.length > 1) {
     humanSummary = `${changes.length} 个活跃变更: ${changes.map(c => c.name).join(', ')}。请选择要操作的变更。`;
