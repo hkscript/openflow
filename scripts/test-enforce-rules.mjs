@@ -651,6 +651,23 @@ console.log('\n[6] 兼容模式（无 phase）保留旧检查');
 }
 {
   const dir = tmpdir();
+  run('无 phase 写 design.md 含 1 个 [Assumption] -> warn certainty-tags', () => {
+    const input = { operation: 'write', filePath: 'openspec/changes/x/design.md', content: 'a [Assumption] b', cwd: dir };
+    const rs = rules.runAllChecks(input);
+    assert.ok(rs.some((r) => r.id === 'certainty-tags' && r.level === 'warn'), JSON.stringify(rs));
+  });
+}
+{
+  const dir = tmpdir();
+  run('无 phase 写 design.md 含 2 个 [Assumption] -> 仍为 warn（不 block）', () => {
+    const input = { operation: 'write', filePath: 'openspec/changes/x/design.md', content: 'a [Assumption] b [Assumption] c', cwd: dir };
+    const rs = rules.runAllChecks(input);
+    assert.ok(rs.some((r) => r.id === 'certainty-tags' && r.level === 'warn'), JSON.stringify(rs));
+    assert.ok(!rs.some((r) => r.level === 'block'), JSON.stringify(rs));
+  });
+}
+{
+  const dir = tmpdir();
   write(dir, '.openflow/building', 'test-change');
   run('无 phase + building 标记 + 缺 writing-plans -> block writing-plans-gate', () => {
     const before = process.env.OPENFLOW_FORCE_WP_MISSING;

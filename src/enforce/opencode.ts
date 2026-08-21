@@ -618,17 +618,22 @@ function checkCertaintyTags(filePath: string, content: string): RuleResult | nul
   if (!content) return null;
 
   const name = path.basename(filePath);
-  if (!name.includes('plan-ready') && !name.includes('test-plan')) return null;
+  const isDesignDoc = name === 'design.md';
+  const isTaskDoc = name.includes('plan-ready') || name.includes('test-plan');
+  if (!isDesignDoc && !isTaskDoc) return null;
 
   const count = (content.match(/\[Assumption\]/g) ?? []).length;
   if (count === 0) return null;
 
+  // design.md is warning-only (a soft reminder resolved during spec); plan-ready/test-plan
+  // escalate to a block at 2+ assumptions to force task splitting before build.
+  const level: 'block' | 'warn' = isDesignDoc ? 'warn' : count >= 2 ? 'block' : 'warn';
   return {
-    level: count >= 2 ? 'block' : 'warn',
+    level,
     id: 'certainty-tags',
     message: `${filePath} 包含 ${count} 个 [Assumption] 标签`,
     detail:
-      count >= 2
+      level === 'block'
         ? '超过 1 个 [Assumption]，建议拆分 task 或回到 spec 阶段补读代码。build 阶段执行前须消解为 [Verified] 或 [Inferred]。'
         : 'build 阶段执行前须消解为 [Verified] 或 [Inferred]。',
   };

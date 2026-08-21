@@ -448,6 +448,16 @@ if (!fs.existsSync(DIST_RULES) || !fs.existsSync(DIST_OPENCODE)) {
       env: { OPENFLOW_NO_BUILD_GATE: '1' },
       operation: 'write', filePath: 'src/a.ts', content: 'x',
     },
+    {
+      name: 'no-phase design.md certainty (1 Assumption, warning-only)',
+      setup: () => {},
+      operation: 'write', filePath: 'openspec/changes/x/design.md', content: 'a [Assumption] b',
+    },
+    {
+      name: 'no-phase design.md certainty (2 Assumptions, warning-only)',
+      setup: () => {},
+      operation: 'write', filePath: 'openspec/changes/x/design.md', content: 'a [Assumption] b [Assumption] c',
+    },
   ];
 
   // ---- payload builders + vector extractors ----
