@@ -13,8 +13,10 @@ description: "Quick start close phase. Use /openflow-close to archive and extrac
 
 2. **读取阶段参考文件**：`close.md`（与主协调器同目录）
    - 包含 close 阶段的详细指令和流程
-   - **归档必须使用 `openspec archive` 命令，禁止使用 mv**
+   - **归档必须使用 `archive-verified <变更名>` 命令，禁止使用 mv 或原始 `openspec archive`**
 
 3. **按指令执行**：先检查前置条件，再按 close.md 的流程执行
+
+4. **设置阶段状态**：确认 `.openflow/phase` 已为 `{"version":1,"change":"<变更名>","phase":"close"}`（verify 写入 receipt 后已切换）；归档只走 `archive-verified`（见 close.md）。
 
 **所有协调逻辑（状态检测、前置条件、续接规则）都在主 SKILL.md 中，必须遵循。**

@@ -426,5 +426,115 @@ await run('已安装 detect（OpenCode）：相对导入 lifecycle-fingerprint �
   assert.equal(JSON.parse(res.stdout).change_name, 'add-widget');
 });
 
+// ===========================================================================
+// [5] 静态模板检查（Task 7：phase 生命周期 / 稳定选择器 / 客户端路径）
+// ===========================================================================
+console.log('\n[5] 静态模板检查（phase 生命周期 / 稳定选择器 / 客户端路径）');
+
+const MAIN_TEMPLATES = [
+  'SKILL.md', 'proposal.md', 'brainstorming.md', 'spec.md',
+  'amend.md', 'build.md', 'verify.md', 'close.md',
+];
+const SHORTCUT_TEMPLATES = [
+  'openflow-proposal/SKILL.md',
+  'openflow-brainstorming/SKILL.md',
+  'openflow-spec/SKILL.md',
+  'openflow-amend/SKILL.md',
+  'openflow-build/SKILL.md',
+  'openflow-verify/SKILL.md',
+  'openflow-close/SKILL.md',
+];
+
+function readTemplate(rel) {
+  const p = path.join(REPO, 'templates', rel);
+  assert.ok(fs.existsSync(p), `模板不存在 ${rel}`);
+  return fs.readFileSync(p, 'utf8');
+}
+
+// Mirrors src/core/skill-generator.ts `replaceToolPaths` so we can assert the
+// client-correct rendered templates (Task 6 installed-artifact paths).
+function renderForTool(tool) {
+  const CFG = {
+    claude: { skillsDir: '.claude/skills', configDir: '.claude' },
+    codex: { skillsDir: '.codex/skills', configDir: '.codex' },
+    cursor: { skillsDir: '.cursor/skills', configDir: '.cursor' },
+    opencode: { skillsDir: '.opencode/skills', configDir: '.opencode' },
+  };
+  const { skillsDir, configDir } = CFG[tool];
+  return (content) => content
+    .replace(/\.claude\/skills\/openflow\//g, `${skillsDir}/openflow/`)
+    .replace(/~\/\.claude\/skills\/openflow\//g, `~/${skillsDir}/openflow/`)
+    .replace(/\.claude\/hooks\//g, `${configDir}/hooks/`)
+    .replace(/~\/\.claude\/hooks\//g, `~/${configDir}/hooks/`);
+}
+
+// Templates that must invoke the installed gate helper (they run gate subcommands).
+const GATE_TEMPLATES = new Set(['brainstorming.md', 'spec.md', 'build.md', 'verify.md', 'close.md']);
+
+await run('全部主/快捷模板提及 .openflow/phase 且不再引用 openflow-enforce.py', () => {
+  for (const rel of [...MAIN_TEMPLATES, ...SHORTCUT_TEMPLATES]) {
+    const c = readTemplate(rel);
+    assert.ok(c.includes('.openflow/phase'), `${rel} 未提及 .openflow/phase`);
+    assert.ok(!c.includes('openflow-enforce.py'), `${rel} 仍引用 openflow-enforce.py`);
+  }
+});
+
+await run('模板源码 hooks 路径用可重写规范形 .claude/hooks，不硬编码 .opencode', () => {
+  for (const rel of [...MAIN_TEMPLATES, ...SHORTCUT_TEMPLATES]) {
+    const c = readTemplate(rel);
+    assert.ok(!c.includes('.opencode/hooks'), `${rel} 源码硬编码 .opencode/hooks`);
+    assert.ok(!c.includes('.config/opencode/hooks'), `${rel} 源码硬编码 .config/opencode/hooks`);
+  }
+});
+
+await run('渲染到 OpenCode：无 .claude/hooks 残留，gate 指向 .opencode/hooks 已安装路径', () => {
+  const render = renderForTool('opencode');
+  for (const rel of [...MAIN_TEMPLATES, ...SHORTCUT_TEMPLATES]) {
+    const rendered = render(readTemplate(rel));
+    assert.ok(!rendered.includes('.claude/hooks'), `${rel} 渲染后仍引用 .claude/hooks`);
+    if (GATE_TEMPLATES.has(rel)) {
+      assert.ok(rendered.includes('.opencode/hooks/openflow-gate.mjs'), `${rel} 渲染后无 opencode gate 路径`);
+    }
+  }
+});
+
+await run('渲染到 Claude：gate/detect 指向 .claude/hooks 已安装路径', () => {
+  const render = renderForTool('claude');
+  for (const rel of GATE_TEMPLATES) {
+    assert.ok(render(readTemplate(rel)).includes('.claude/hooks/openflow-gate.mjs'), `${rel} 渲染后无 claude gate 路径`);
+  }
+  assert.ok(render(readTemplate('SKILL.md')).includes('.claude/hooks/openflow-detect.mjs'), 'SKILL.md 渲染后无 claude detect 路径');
+});
+
+await run('spec.md 生成 T-001 稳定 ID + file::selector 选择器，plan-ready 绑定稳定 ID', () => {
+  const c = readTemplate('spec.md');
+  assert.match(c, /T-\d{3}/, '缺少 T-001 稳定 ID 示例');
+  assert.ok(c.includes('::'), '缺少 file::selector 选择器格式');
+  assert.match(c, /Test cases?\s*:\s*T-\d{3}/i, 'plan-ready 任务未绑定稳定 ID（Test cases: T-001）');
+});
+
+await run('build.md 先写 bootstrap 再写 task-build，结尾指向 /openflow verify', () => {
+  const c = readTemplate('build.md');
+  assert.match(c, /"mode"\s*:\s*"bootstrap"/, '缺少 bootstrap 阶段写入');
+  assert.match(c, /"mode"\s*:\s*"task-build"/, '缺少 task-build 阶段写入');
+  assert.match(c, /"task"\s*:\s*"\d+"/, 'task-build 缺少 task 字段');
+  assert.ok(c.includes('/openflow verify'), 'build 结尾未指向 /openflow verify');
+  assert.ok(!c.includes('/openflow close'), 'build 错误指向 /openflow close');
+});
+
+await run('verify.md 运行 write-verify-receipt 且成功后才设 phase=close', () => {
+  const c = readTemplate('verify.md');
+  assert.ok(c.includes('write-verify-receipt'), '缺少 write-verify-receipt 指令');
+  assert.match(c, /userConfirmation/, '缺少用户确认输入字段');
+  assert.match(c, /scenarioCoverage/, '缺少场景覆盖输入字段');
+  assert.match(c, /"phase"\s*:\s*"close"/, '成功后才设 phase close');
+});
+
+await run('close.md 只用 archive-verified，禁止原始 openspec archive 命令', () => {
+  const c = readTemplate('close.md');
+  assert.ok(c.includes('archive-verified'), '缺少 archive-verified 指令');
+  assert.ok(!/^\s*openspec archive\s/m.test(c), 'close 包含原始 openspec archive 命令');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

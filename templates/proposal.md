@@ -83,6 +83,14 @@ ls openspec/changes/<变更名>/proposal.md 2>/dev/null && echo "已存在，追
 
 **必须使用英文标题**：`## Why` 和 `## What Changes`，不是中文 "为什么" 和 "做什么"。这是 openspec validate 和 openspec archive 的校验要求。
 
+**设置阶段状态（进入 proposal 阶段）**：
+
+```bash
+printf '%s\n' '{"version":1,"change":"<变更名>","phase":"proposal"}' > .openflow/phase
+```
+
+proposal 是非 build 阶段，`phase` 不带 `mode`/`task`。若 `.openflow/phase` 已存在（续接），跳过创建。
+
 ### 4. 提示下一步
 
 > "需求已记录。接下来可以用 `/openflow spec` 生成完整规格（包括测试计划和实现计划），或 `/openflow brainstorming` 进行深度设计。"

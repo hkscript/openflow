@@ -20,6 +20,14 @@ verify 发现的问题可以当场修：回到 build 修 bug、回到 amend 补 
 
 ## 流程
 
+**进入 verify 阶段时，先设置阶段状态**：
+
+```bash
+printf '%s\n' '{"version":1,"change":"<变更名>","phase":"verify"}' > .openflow/phase
+```
+
+verify 是非 build 阶段，`phase` 不带 `mode`/`task`。若 `.openflow/phase` 已存在（续接），跳过创建。
+
 ### 1. 确认测试状态
 
 读取 `test-plan.md`，检查所有测试行状态：
@@ -60,7 +68,7 @@ cargo test        # Rust
 - 依赖是否符合设计约束？
 - **「改动文件」/文件表对账**：design.md `## 改动文件` 节中列出的路径 vs `git diff <base>...HEAD --name-only`（整个变更分支的累计改动，**不只是未提交**——已提交的改动 `git diff` 默认看不到）与实际代码——表里有但没改、或改了但不在表 → 文档漂移，退回 `/openflow amend` 同步。跨仓库路径（顶层目录不在当前工作区）不参与对账，人工核对
 - **改动点归属对账（闸门 3 扩展，`check-design-consistency` 自动扫，含已提交的 base diff）**：
-  - **必须先跑**：`node <base>/.claude/hooks/openflow-gate.mjs check-design-consistency <变更名>`（无本地 hook 用全局 `~/.claude/hooks/openflow-gate.mjs`），把输出的 warnings **逐条对到改动点上**，确认是"改动落错方法"还是"误报"后才放行——**不跑 gate 直接判通过 = 闸门 3 未执行**
+  - **必须先跑**：`node <base>/.claude/hooks/openflow-gate.mjs check-design-consistency <变更名>`（无本地 gate 脚本时用已安装 openflow 的全局 helpers，或退回手动对账），把输出的 warnings **逐条对到改动点上**，确认是"改动落错方法"还是"误报"后才放行——**不跑 gate 直接判通过 = 闸门 3 未执行**
   - "归属漂移" warning：design 声称的方法 vs diff 实际落点方法不一致（插错方法）——**改了没声称的方法，就是"改动落错了方法"的信号，必须追查它改了什么、design 声称的那个方法有没有**
   - "声称未落地" warning：design backtick 声称的改动目标方法，其文件有改动却无任何落点 → 未实现或已在上游提交
   - "完整性" warning：未覆盖的方法调用 design 点名的下游链路方法（命名不限同前缀）、或同前缀兄弟（带 `New`/`Old`/`V2` 后缀）共享下游调用但未覆盖
@@ -106,12 +114,49 @@ cargo test        # Rust
 - 核对结果写在 verify-issues.md 中：`#1 ✅ 断言匹配 / #2 ⚠️ 测试 check stdout 但 scenario 要求 stderr`
 - 发现不匹配 → 回到 build 修正测试
 
-### 6. 通过
+### 6. 写入验证凭据（write-verify-receipt）
 
-**前提：改动点确认清单已展示给用户并获显式确认。**
+闸门全部通过、**改动点确认清单已展示给用户并获显式确认**后，把验证结果写入 receipt（`verify-result.json`）：
 
-> "✅ 验证通过：N/N 测试 PASS，M/M 场景覆盖（100%），改动点清单已确认。
-> 接下来用 `/openflow close` 归档。"
+1. 把验证结果整理成 receipt 输入 JSON（如 `<receipt-input>.json`），字段与 gate 校验严格对应：
+
+   ```json
+   {
+     "testRuns": [{ "name": "full-suite", "exitCode": 0 }],
+     "scenarioCoverage": { "mapped": 3, "total": 3 },
+     "designConsistency": { "pass": true, "blockers": [] },
+     "userConfirmation": { "received": true }
+   }
+   ```
+
+   规则：
+   - `testRuns`：必须 ≥1 个 `exitCode: 0` 的真实测试运行记录
+   - `scenarioCoverage`：`mapped === total` 且 ≥1（全场景覆盖）
+   - `designConsistency`：`blockers` 必须为空
+   - `userConfirmation`：`received` 必须为 true——**用户显式确认改动点清单后**才填，AI 不能自填
+
+2. 运行已安装客户端的 `write-verify-receipt` 子命令（路径推导：把 SKILL.md 路径中的 `skills/openflow/SKILL.md` 替换为 `hooks/openflow-gate.mjs`，无本地 hook 时用已安装 openflow 的全局 helpers）：
+
+   ```bash
+   node <base>/.claude/hooks/openflow-gate.mjs write-verify-receipt <变更名> <receipt-input>.json
+   ```
+
+   gate 会：先复核 verify 前置条件（含 building 标记残留检查）→ 收集最终工作区指纹 → 原子写入 `openspec/changes/<变更名>/verify-result.json`。输出 JSON 的 `pass` 指示是否成功。
+
+3. **只有 `pass: true` 才切换阶段为 close**：
+
+   ```bash
+   printf '%s\n' '{"version":1,"change":"<变更名>","phase":"close"}' > .openflow/phase
+   ```
+
+   失败则回到对应闸门修复后重跑 verify（verify 可反复跑），不要硬写 phase。receipt 绑定当前工作区指纹，receipt 后任何代码改动都会使 `check-verify-ready` 失败（stale）——归档前若有改动需重新 verify。
+
+### 7. 通过
+
+**前提：`write-verify-receipt` 已成功（receipt 有效）且 phase 已切到 close。**
+
+> "✅ 验证通过：N/N 测试 PASS，M/M 场景覆盖（100%），改动点清单已确认，verify-result.json 已写入。
+> 接下来用 `/openflow close` 归档（close 阶段执行 `archive-verified`，不再做测试）。"
 
 ## 关键原则
 

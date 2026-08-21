@@ -92,6 +92,14 @@ mkdir -p openspec/changes/<变更名>/specs
 
 **必须使用英文标题**：`## Why` 和 `## What Changes`。这是 openspec validate 和 openspec archive 的校验要求。
 
+**设置阶段状态（进入 brainstorming 阶段）**：
+
+```bash
+printf '%s\n' '{"version":1,"change":"<变更名>","phase":"brainstorming"}' > .openflow/phase
+```
+
+brainstorming 是非 build 阶段，`phase` 不带 `mode`/`task`。若 `.openflow/phase` 已存在（续接），跳过创建。
+
 在以上格式基础上，补充 brainstorming 特有的内容：
 - 需求描述（Superpowers 探索出的用户意图）→ 填入 `## Why`
 - 设计方向（推荐方案及核心决策）→ 在 `## Why` 中体现

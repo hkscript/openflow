@@ -39,6 +39,14 @@ description: Revise requirements during build — delta to OpenSpec docs, impact
 - `plan-ready.md`
 - `docs/superpowers/plans/` 下对应实现计划
 
+**设置阶段状态（进入 amend 阶段）**：
+
+```bash
+printf '%s\n' '{"version":1,"change":"<变更名>","phase":"amend"}' > .openflow/phase
+```
+
+amend 是非 build 阶段，`phase` 不带 `mode`/`task`；**`.openflow/building` 标记保留**（见下方注），build 续接不受影响。
+
 ### 2. 判断修订类别
 
 | 情况 | 处理 |
@@ -106,8 +114,9 @@ openspec validate <变更名> --strict
 
 - 保留 `## 来源` 和 `## Amendments`
 - 保留已完成 task 的 checkbox 状态
-- 追加新 task（绑定 test-plan.md 中的新测试编号）
-- 标记受影响但未修改的 task（如 "⚠️ 测试 #3 预期行为变更，需调整此 task"）
+- 追加新 task（绑定 test-plan.md 中的新测试**稳定 ID** `T-00x`）
+- 标记受影响但未修改的 task（如 "⚠️ 测试 T-002 预期行为变更，需调整此 task"）
+- **迁移旧引用**：test-plan/plan-ready 中旧的唯一 `#N` 引用在此次编辑时必须转为稳定 ID `T-00x`（`- Test cases: T-001, T-002`）；混合 / 重复 / 歧义引用会导致 build 时 `tdd-task-unmapped` fail-closed 报错
 
 ### 8. 同步详细实现计划
 

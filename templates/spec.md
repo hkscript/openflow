@@ -32,6 +32,14 @@ description: Call OpenSpec to generate specs + translate to plan-ready.md, auto-
 如果有多个，列出并让用户选择：
 > "检测到多个活跃变更：[列表]。要对哪个生成规格？"
 
+**设置阶段状态（进入 spec 阶段）**：
+
+```bash
+printf '%s\n' '{"version":1,"change":"<变更名>","phase":"spec"}' > .openflow/phase
+```
+
+spec 是非 build 阶段，`phase` 不带 `mode`/`task`。若 `.openflow/phase` 已存在（续接），跳过创建。
+
 ### 2. 理解现有代码（必做，生成设计前）
 
 **设计不能悬空——必须先读懂现有架构再写 design.md。**
@@ -141,8 +149,8 @@ openspec validate <变更名> --strict
 遍历 `specs/` 目录下所有文件，提取每个 `#### Scenario:` 及其所属 requirement，生成测试计划。
 
 **生成规则：**
-1. 每个 scenario 对应 1 个测试用例（函数/方法）
-2. 测试用例名称从 scenario 标题派生（snake_case）
+1. 每个 scenario 对应 1 个测试用例（函数/方法），**分配稳定编号 `T-001`、`T-002`…**（按 requirement 顺序递增）
+2. 每个用例必须给出**确定性选择器**：`<测试文件>::<测试函数名>`（如 `tests/auth/test_login.py::test_login_with_valid_credentials`）；函数名从 scenario 标题派生（snake_case）
 3. 测试内容从 scenario 描述推导（给定条件 → test setup，期望结果 → assertion）
 4. 测试文件路径根据项目约定自动推断（见下方）
 
@@ -154,15 +162,22 @@ openspec validate <变更名> --strict
 ## 测试映射
 
 <!--
-  每一行 = 一个场景 → 一个测试用例
-  build 阶段严格按此映射执行 TDD，不得跳过或合并
+  机器格式：每个用例一行 `T-00x: `<测试文件>::<测试函数名>``
+  gate/enforce 逐行解析此格式（ID 必须 T-00x；选择器必须能 grep 到真实测试函数）。
+  不要给这行加列表符号/表格管道，保持该格式原样。
 -->
 
-| # | 来源 Requirement | Scenario | 测试文件 | 测试函数 | 类型 |
-|---|-----------------|----------|----------|----------|------|
-| 1 | REQ-001: 用户登录 | 正确凭据登录成功 | `tests/auth/test_login.py::test_login_with_valid_credentials` | `test_login_with_valid_credentials` | 功能 |
-| 2 | REQ-001: 用户登录 | 错误密码登录失败 | `tests/auth/test_login.py::test_login_with_wrong_password` | `test_login_with_wrong_password` | 功能 |
-| 3 | REQ-002: 会话管理 | Token过期自动刷新 | `tests/auth/test_session.py::test_token_expiry_triggers_refresh` | `test_token_expiry_triggers_refresh` | 集成 |
+T-001: `tests/auth/test_login.py::test_login_with_valid_credentials`
+T-002: `tests/auth/test_login.py::test_login_with_wrong_password`
+T-003: `tests/auth/test_session.py::test_token_expiry_triggers_refresh`
+
+**追溯表（人工可读，verify 场景覆盖率对账用）：**
+
+| ID | 来源 Requirement | Scenario | 测试文件::测试函数 | 类型 |
+|----|-----------------|----------|-------------------|------|
+| T-001 | REQ-001: 用户登录 | 正确凭据登录成功 | `tests/auth/test_login.py::test_login_with_valid_credentials` | 功能 |
+| T-002 | REQ-001: 用户登录 | 错误密码登录失败 | `tests/auth/test_login.py::test_login_with_wrong_password` | 功能 |
+| T-003 | REQ-002: 会话管理 | Token过期自动刷新 | `tests/auth/test_session.py::test_token_expiry_triggers_refresh` | 集成 |
 
 ## 统计
 
@@ -182,7 +197,7 @@ openspec validate <变更名> --strict
 
 以 test-plan.md 和 OpenSpec 文档为输入，生成可执行的实现计划。
 
-**格式要求（与旧版的关键区别——每个 task 带追溯信息）：**
+**格式要求（每个 task 绑定 test-plan 稳定 ID + 选择器）：**
 
 ```markdown
 # 实现计划：<变更名>
@@ -200,12 +215,19 @@ openspec validate <变更名> --strict
 ```markdown
 ### Task 1: <任务名>
 - 目标：<做什么>
+- Test cases: T-001, T-002
+- Files: `src/auth/login.py`, `tests/auth/test_login.py`
 - 改动文件：<文件路径 [Verified] 或 [Assumption: 需确认路径]>
-- 覆盖场景：<test-plan.md 中的 #编号，如 #1, #2>
-- 测试先行：<先写哪个测试，在哪个文件 [Verified]>
+- 覆盖场景：T-001, T-002（引用 test-plan.md 稳定 ID）
+- 测试先行：<先写哪个测试（T-00x），在哪个文件 [Verified]>
 - 验证方式：<运行什么测试命令，预期结果>
 - 确定性：<[Verified] / [Inferred] / [Assumption] — 本 task 的整体确定性>
 ```
+
+**`Test cases` 与 `Files` 字段由 gate/enforce 逐行解析，必须存在：**
+- `- Test cases: T-001, T-002` — 引用 test-plan.md 中的稳定 ID（用逗号分隔）
+- `- Files: <文件路径>` — 该 task 允许修改的实现文件与测试文件（逗号分隔，路径可用 backtick）
+- 可选 `- Test framework setup: <根配置文件>` — 声明任务需要的有限测试框架配置（仅允许框架已知的根文件）
 
 **确定性标签规则：**
 - `[Verified]` = 所有改动文件和测试文件路径均已通过 grep/Read 确认存在
@@ -214,8 +236,8 @@ openspec validate <变更名> --strict
 - 如果 task 有 ≥2 个 `[Assumption]`，应拆分或回到步骤 2 补读代码
 
 **翻译规则：**
-1. 每个 task 必须绑定至少 1 个 test-plan 场景编号
-2. 每个 task 必须在"测试先行"字段指明先写哪个测试
+1. 每个 task 必须绑定至少 1 个 test-plan **稳定 ID**（`T-00x`），禁止再用旧 `#编号`
+2. 每个 task 必须在"测试先行"字段指明先写哪个测试（T-00x）
 3. 按执行依赖排序，不按功能模块排序
 4. 同一个测试文件里的测试尽量归到同一个 task
 

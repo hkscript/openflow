@@ -19,9 +19,10 @@ verify 已经通过，这一步只做三件事：提取经验 → 同步 tasks.m
 
 ## 前置条件
 
-- `/openflow verify` 已通过（测试全绿、覆盖率 100%、设计一致）
+- `/openflow verify` 已通过（测试全绿、覆盖率 100%、设计一致、`write-verify-receipt` 已写入 receipt）
 - `plan-ready.md` 和 `test-plan.md` 存在
 - `check-close-ready` 通过：verify-issues.md 无未解决项、design.md 文件表与实现一致
+- **`.openflow/phase` 已为 close**（verify 写入 receipt 成功后会自动切换；若缺失或仍为 verify/build，先回 `/openflow verify` 完成 receipt 流程）
 
 不满足时提示：
 > "请先完成 /openflow verify 验证（check-close-ready 会实测 verify-issues 与 design 一致性）。"
@@ -115,13 +116,22 @@ grep -q '^## What Changes' openspec/changes/<变更名>/proposal.md && echo "✅
 
 如果 `## Why` 或 `## What Changes` 缺失，**先修复 proposal.md 再归档**——根据变更内容补全缺失的节。这是阻塞性问题，不能在缺少必填节的情况下归档。
 
-执行归档命令（用 Bash 工具）：
+执行归档命令（用 Bash 工具，路径推导：把 SKILL.md 路径中的 `skills/openflow/SKILL.md` 替换为 `hooks/openflow-gate.mjs`）：
 
 ```bash
-openspec validate <变更名> --strict
-openspec archive <变更名> --yes
-rm -f .openflow/building   # 清理 build 阶段标记（build 未正常退出时可能残留）
+node <base>/.claude/hooks/openflow-gate.mjs archive-verified <变更名>
 ```
+
+`archive-verified` 是唯一的官方归档路径，它：
+1. **归档前立即复核 verify receipt**（`check-verify-ready`）——receipt 缺失/过期/change 不匹配则拒绝归档，绝不硬归档
+2. 通过注入 runner 调用 OpenSpec 归档，要求执行成功
+3. 校验：源目录移除、恰好一个新归档目录（`YYYY-MM-DD-<变更名>`）、`tasks.md`/`lessons.md`/`verify-result.json` 保留
+4. 全部通过后才清理 `.openflow/phase` 与 `.openflow/building`
+
+**禁止绕过**：不要用原始 `openspec archive <变更名> --yes` 或 `mv` 手动归档——那会跳过 receipt 复核，产生无验证归档。**`archive-verified` 失败必须修复后重新 `/openflow verify`（reverify），不能绕过。** 常见失败处理：
+- receipt stale（归档前有代码改动）→ 重新跑全量测试并重新 `write-verify-receipt`
+- 源目录未移除 / 归档目录异常 → 检查 openspec 归档结果后重试
+- 缺 `tasks.md`/`lessons.md` → 先补上对应产物再归档
 
 **验证归档成功：**
 

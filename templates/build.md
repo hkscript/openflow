@@ -27,11 +27,20 @@ description: Test-first implementation driven by test-plan.md — generate test 
 
 ### 0. 前置检查
 
-#### 0.0 创建 build 阶段标记
+#### 0.0 创建 build 阶段状态
 
-进入 build 阶段时，立即创建标记文件 `.openflow/building`（内容写当前变更名即可）。若标记已存在（断点恢复），跳过创建。
+进入 build 阶段时，立即写入阶段状态（bootstrap 模式）并创建 building 标记：
 
-此标记启用 enforcement hook 的 writing-plans 闸门（见 0.1）：标记存在期间，若 writing-plans 不可用，实现类代码的 Edit/Write 会被阻断。标记在步骤 7 完成、close 或重新 build 时删除。
+```bash
+printf '%s\n' '{"version":1,"change":"<变更名>","phase":"build","mode":"bootstrap"}' > .openflow/phase
+printf '%s\n' '<变更名>' > .openflow/building
+```
+
+若 `.openflow/phase` 已存在且是 build（断点恢复），跳过创建。
+
+**bootstrap 写入边界**：bootstrap 是 build 的第一种受控模式，**只允许写 test-plan.md 声明的测试选择器对应文件（`T-00x` 选择器里的测试文件）与任务声明的有限测试框架配置**（plan-ready.md `Test framework setup:` 声明的框架根配置）。生产实现文件仍被 enforcement hook 阻断（phase-boundary）。
+
+`.openflow/building` 标记启用 enforcement hook 的 writing-plans 闸门（见 0.1）：标记存在期间，若 writing-plans 不可用，实现类代码的 Edit/Write 会被阻断。标记在步骤 7 完成、close 或重新 build 时删除。
 
 #### 0.1 Superpowers writing-plans（硬性依赖）
 
@@ -170,6 +179,14 @@ docs/superpowers/plans/YYYY-MM-DD-<变更名>.md
 
 ### 5. 执行 TDD（逐 task）
 
+**进入每个 task 前，先把阶段状态切换为 task-build 并指定当前 task**：
+
+```bash
+printf '%s\n' '{"version":1,"change":"<变更名>","phase":"build","mode":"task-build","task":"1"}' > .openflow/phase
+```
+
+task-build 是 build 的第二种受控模式：**只允许修改当前 Task 声明的实现文件与测试选择器**（plan-ready 中该 task 的 `Files:` 与 `Test cases:` 对应文件）；TDD 校验只针对当前 task 的测试选择器。一个 task 完成后，进入下一个 task 前再次切换 `task` 编号。
+
 每个 task 按以下铁律执行：
 
 ```
@@ -182,6 +199,8 @@ Step 6: git commit（单 task）
 Step 7: 更新 plan-ready.md 中该 task 的 checkbox 为 [x]
 Step 8: 更新 test-plan.md 中对应测试行的状态为 ✅
 ```
+
+**迁移期旧引用**：plan-ready/test-plan 中旧的唯一 `#N` 引用可临时使用；但下次 spec/amend 编辑时必须转为稳定 ID `T-00x`。**混合 `T-id` 与 `#N`、重复、歧义引用会导致 `tdd-task-unmapped` 报错（fail-closed）**，不要混用。
 
 **并行优化：** 如果存在多个独立 task（不共享测试文件、不依赖彼此的代码），可派子代理并行执行（参见 subagent-driven-development skill）。
 
@@ -211,7 +230,7 @@ Step 8: 更新 test-plan.md 中对应测试行的状态为 ✅
 
 全部满足后，**删除 `.openflow/building` 标记文件**（退出 build 阶段），然后输出：
 > "所有实现任务已完成，测试全部通过（N 个测试覆盖 M 个场景），[前端/后端/全栈] 均已修改完毕。
-> 接下来用 `/openflow close` 验证测试覆盖度并归档。"
+> 接下来用 `/openflow verify` 做归档前验证（全量测试 + 覆盖率 + 设计一致性）。"
 
 ## 关键原则
 

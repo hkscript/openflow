@@ -124,9 +124,7 @@ OpenSpec scenarios ──→ test-plan.md (场景→测试映射) ──→ Supe
 1. **提示词层面**：AI 按要求自我约束
 2. **Hook 层面**：`openflow init` 安装的 PreToolUse hook 会在 Edit/Write 时自动拦截违规操作
 
-已安装的 hook 会拦截：编造不存在的文件路径、build 阶段修改规格文档。非阻断性警告：plan-ready.md 中出现 [Assumption] 标签、tasks.md 需要同步。
-
-详见 `.claude/hooks/openflow-enforce.py`。
+已安装的 enforcement 产物（Claude hook / OpenCode plugin，路径随客户端安装自动替换）会拦截：编造不存在的文件路径、build 阶段修改规格文档。非阻断性警告：plan-ready.md 中出现 [Assumption] 标签、tasks.md 需要同步。
 
 | 阶段 | 允许写入 | 禁止写入 |
 |------|----------|----------|
@@ -137,6 +135,34 @@ OpenSpec scenarios ──→ test-plan.md (场景→测试映射) ──→ Supe
 | build | 代码、测试、实现计划状态 | 规格文档（除非另开变更） |
 | verify | 验证记录、`verify-issues.md` | 代码、测试、规格文档 |
 | close | 归档、`lessons.md` | 代码、测试、其它实现文件 |
+
+## 阶段状态（`.openflow/phase`）
+
+每个 openflow 阶段都要把当前阶段状态写入 `.openflow/phase`（UTF-8 JSON）。这是**路由声明**，不是授权凭证。格式：
+
+```bash
+# 非 build 阶段（proposal / brainstorming / spec / amend / verify / close）：不带 mode/task
+printf '%s\n' '{"version":1,"change":"<变更名>","phase":"<phase>"}' > .openflow/phase
+```
+
+build 阶段有两种受控模式，必须显式写入 `mode`：
+
+```bash
+# bootstrap：进入 build，只允许写 test-plan.md 声明的测试选择器 + 有限的任务声明框架配置
+printf '%s\n' '{"version":1,"change":"<变更名>","phase":"build","mode":"bootstrap"}' > .openflow/phase
+printf '%s\n' '<变更名>' > .openflow/building
+
+# task-build：进入具体任务，只允许改该任务声明的实现文件/测试选择器，TDD 校验针对当前任务
+printf '%s\n' '{"version":1,"change":"<变更名>","phase":"build","mode":"task-build","task":"1"}' > .openflow/phase
+```
+
+规则：
+
+- `.openflow/building` 是生命周期上下文标记，仅 build 阶段创建；amend 可保留它（build 续接）；`archive-verified` 通过后才清理
+- 非 build 阶段**不允许携带 `mode`/`task`**；build 必须有 `mode`；`task-build` 必须有数字 `task`
+- phase 指向缺失或已归档的 change 时视为无效，除修复 `.openflow/phase` 外禁止写入
+- 测试计划每行给出稳定 ID `T-001` 与确定性选择器（如 `tests/auth/test_login.py::test_login_with_valid_credentials`）；plan-ready 任务绑定同一稳定 ID（`Test cases: T-001`）
+- 迁移期旧的唯一 `#N` 引用可临时使用，但下次 spec/amend 编辑时必须转为稳定 ID；混合 / 重复 / 歧义引用会 fail-closed 报错
 
 ## 子命令路由（必须读取对应参考文件）
 
@@ -150,13 +176,13 @@ OpenSpec scenarios ──→ test-plan.md (场景→测试映射) ──→ Supe
 | `/openflow amend` | `amend.md` | 受控修订需求，含测试影响分析 |
 | `/openflow build` | `build.md` | 测试桩生成 → TDD 执行 |
 | `/openflow verify` | `verify.md` | 验证闸门：全量测试 + 覆盖率 |
-| `/openflow close` | `close.md` | **⚠️ 必须使用 `openspec archive <变更名> --yes`，禁止使用 mv 命令** |
+| `/openflow close` | `close.md` | **⚠️ 必须使用 `archive-verified <变更名>`，禁止使用 mv 或原始 `openspec archive` 命令** |
 
-**归档铁律**：`/openflow close` 的归档步骤**必须**使用 `openspec archive` 命令，不能使用 `mv` 手动移动文件。原因：
-- `openspec archive` 会自动验证变更完整性
-- `openspec archive` 会更新主规格文件（`openspec/specs/`）
-- `openspec archive` 会生成正确的归档目录名（`YYYY-MM-DD-<变更名>`）
-- 使用 `mv` 会导致规格不更新、验证缺失、归档格式错误
+**归档铁律**：`/openflow close` 的归档步骤**必须**使用 `archive-verified <变更名>` 命令（gate 子命令），不能使用 `mv` 或原始 `openspec archive` 绕过。原因：
+- `archive-verified` 会在归档前**立即复核 verify receipt**（`check-verify-ready`），receipt 过期/缺失则拒绝归档
+- 通过注入 runner 调用 OpenSpec 归档并校验：源目录移除、恰好一个新归档目录、`tasks.md`/`lessons.md`/`verify-result.json` 保留
+- 全部校验通过后才清理 `.openflow/phase` 与 `.openflow/building`
+- 使用 `mv` 或原始 `openspec archive` 会导致无验证归档、规格不更新、归档格式错误——`archive-verified` 失败必须修复后重新 verify，不能绕过
 
 ## 当前工作区
 
@@ -242,7 +268,7 @@ node <base>/.claude/hooks/openflow-detect.mjs
       ↓
 2. 检查前置条件（verify 已通过）
       ↓
-3. 按 close.md 步骤执行（lessons → tasks.md → openspec archive）
+3. 按 close.md 步骤执行（lessons → tasks.md → `archive-verified`）
       ↓
 4. 禁止跳过读取参考文件的步骤
 ```

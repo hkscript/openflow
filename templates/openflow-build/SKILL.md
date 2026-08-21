@@ -17,4 +17,6 @@ description: "Quick start build phase. Use /openflow-build to execute TDD implem
 
 3. **按指令执行**：先检查前置条件，再按 build.md 的流程执行
 
+4. **设置阶段状态**：按 build.md 步骤 0 写入 `.openflow/phase`（`{"version":1,"change":"<变更名>","phase":"build","mode":"bootstrap"}`）并创建 `.openflow/building` 标记；进入每个 task 前切到 `mode:"task-build"` + `task:"<编号>"`（见主协调器「阶段状态」节）。
+
 **所有协调逻辑（状态检测、前置条件、续接规则）都在主 SKILL.md 中，必须遵循。**

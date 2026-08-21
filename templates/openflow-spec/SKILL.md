@@ -17,4 +17,6 @@ description: "Quick start spec phase. Use /openflow-spec to generate specs, test
 
 3. **按指令执行**：先检查前置条件，再按 spec.md 的流程执行
 
+4. **设置阶段状态**：确认 `.openflow/phase` 记录当前阶段（`{"version":1,"change":"<变更名>","phase":"spec"}`），缺失则写入（非 build 阶段不带 mode/task，见主协调器「阶段状态」节）。
+
 **所有协调逻辑（状态检测、前置条件、续接规则）都在主 SKILL.md 中，必须遵循。**
