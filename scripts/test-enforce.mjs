@@ -519,7 +519,9 @@ if (!fs.existsSync(DIST_RULES) || !fs.existsSync(DIST_OPENCODE)) {
       if (!m) continue;
       ids.push(`${m[1] === '❌' ? 'block' : 'warn'}:${m[2]}`);
     }
-    return ids.sort();
+    // 不在此排序：三方适配器自身必须输出 plan 规定的有序向量（block 在前、id 升序），
+    // 测试按原生顺序断言，任何一端的排序回归都会暴露（review M2）。
+    return ids;
   }
 
   function extractOpenCodeIds(output, warns) {
@@ -534,7 +536,8 @@ if (!fs.existsSync(DIST_RULES) || !fs.existsSync(DIST_OPENCODE)) {
       const m = w.match(/\[openflow 防火墙: ([a-z0-9-]+)\]/);
       if (m) ids.push(`warn:${m[1]}`);
     }
-    return ids.sort();
+    // 与 extractClaudeIds 一致：保持适配器原生顺序，断言有序向量契约（review M2）。
+    return ids;
   }
 
   async function withEnv(env, fn) {
@@ -582,8 +585,7 @@ if (!fs.existsSync(DIST_RULES) || !fs.existsSync(DIST_OPENCODE)) {
 
       const expected = await withEnv(env, () =>
         rules.runAllChecks({ operation: f.operation, filePath: f.filePath, content: f.content, cwd: dir })
-          .map((r) => `${r.level}:${r.id}`)
-          .sort(),
+          .map((r) => `${r.level}:${r.id}`),
       );
 
       const claude = extractClaudeIds(

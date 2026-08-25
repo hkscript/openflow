@@ -232,17 +232,30 @@ function installHooks(baseDir: string, toolPaths: typeof TOOL_PATHS['claude'], g
   mergeHooksConfig(settingsFile, hookScriptDest, oldPyHook);
 }
 
+// 解析 JSON 配置文件；解析失败时把原始内容备份到 `<file>.bak` 并告警，返回 null。
+// 调用方随后以空配置合并，绝不整包覆盖用户的 settings.json / opencode.json
+//（JSONC/手改损坏时第三方插件等既有内容会被保留在 .bak 中，review I2）。
+function parseJsonConfig(filePath: string, label: string): any | null {
+  if (!fileExists(filePath)) return null;
+  const raw = fs.readFileSync(filePath, 'utf-8');
+  try {
+    return JSON.parse(raw);
+  } catch {
+    const bak = `${filePath}.bak`;
+    try {
+      fs.copyFileSync(filePath, bak);
+      logger.warn(`${label} 无法解析（${filePath}），原文件已备份到 ${bak}，将以空配置合并`);
+    } catch {
+      logger.warn(`${label} 无法解析（${filePath}），且备份失败，将以空配置合并`);
+    }
+    return null;
+  }
+}
+
 function mergeHooksConfig(settingsFile: string, hookScriptPath: string, oldPyHook: string): void {
   let settings: any = {};
-
-  if (fileExists(settingsFile)) {
-    try {
-      const raw = fs.readFileSync(settingsFile, 'utf-8');
-      settings = JSON.parse(raw);
-    } catch {
-      logger.warn('Could not parse existing settings.json, creating new');
-    }
-  }
+  const parsed = parseJsonConfig(settingsFile, 'settings.json');
+  if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) settings = parsed;
 
   // Initialize hooks structure
   if (!settings.hooks) settings.hooks = {};
@@ -329,14 +342,8 @@ function installOpencodeRuntime(baseDir: string, global: boolean, toolPaths: typ
 
 function mergeOpencodePluginConfig(opencodeJsonPath: string, pluginDest: string): void {
   let config: any = {};
-
-  if (fileExists(opencodeJsonPath)) {
-    try {
-      config = JSON.parse(fs.readFileSync(opencodeJsonPath, 'utf-8'));
-    } catch {
-      logger.warn('Could not parse existing opencode.json, creating new');
-    }
-  }
+  const parsed = parseJsonConfig(opencodeJsonPath, 'opencode.json');
+  if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) config = parsed;
 
   if (!config.plugin) config.plugin = [];
   if (!Array.isArray(config.plugin)) config.plugin = [config.plugin];

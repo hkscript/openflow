@@ -239,6 +239,32 @@ await run('OpenCode 插件 URL 规范化为 pathToFileURL(pluginDest).href，保
   assert.equal(openflowPlugins[0], canonical, `插件 URL = ${canonical}`);
 });
 
+await run('损坏的 settings.json / opencode.json 备份为 .bak，不整包覆盖用户配置', () => {
+  const home = tmpdir('openflow-home-');
+  const proj = tmpdir('openflow-proj-');
+  write(proj, 'openspec/.gitkeep', '');
+  // JSONC 风格（带尾逗号）：JSON.parse 失败，属手改/编辑器常见形态
+  write(proj, '.claude/settings.json', '{\n  "hooks": { "PreToolUse": [ { "matcher": "Edit", "hooks": [{ "type": "command", "command": "node keep-me.mjs" }] } ] },\n}');
+  write(proj, '.opencode/opencode.json', '{\n  "plugin": ["third-party-plugin"],\n}');
+
+  const res = runInit(proj, home, {});
+  assert.equal(res.status, 0, `init exit=${res.status}\nstderr=${res.stderr}`);
+
+  // 原文件被保留为 .bak，内容未丢
+  const settingsBak = path.join(proj, '.claude/settings.json.bak');
+  const opencodeBak = path.join(proj, '.opencode/opencode.json.bak');
+  assert.ok(fs.existsSync(settingsBak), 'settings.json.bak 存在');
+  assert.ok(fs.existsSync(opencodeBak), 'opencode.json.bak 存在');
+  assert.match(fs.readFileSync(settingsBak, 'utf8'), /keep-me\.mjs/, '.bak 保留原第三方 hook');
+  assert.match(fs.readFileSync(opencodeBak, 'utf8'), /third-party-plugin/, '.bak 保留原第三方插件');
+
+  // 新配置仍是合法 JSON，openflow 内容已写入
+  JSON.parse(fs.readFileSync(path.join(proj, '.claude/settings.json'), 'utf8'));
+  const config = JSON.parse(fs.readFileSync(path.join(proj, '.opencode/opencode.json'), 'utf8'));
+  assert.ok(Array.isArray(config.plugin), '新 opencode.json 为合法数组');
+  assert.ok(config.plugin.some((p) => typeof p === 'string' && /openflow-enforce\.js/.test(p)), '新 opencode.json 注册 openflow 插件');
+});
+
 await run('二次安装幂等：settings.json 与 opencode.json 字节稳定', () => {
   const home = tmpdir('openflow-home-');
   const proj = tmpdir('openflow-proj-');

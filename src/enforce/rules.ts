@@ -346,9 +346,11 @@ function parseTestPlanRows(content: string): TestSelector[] {
     if (!trimmed) continue;
     // Canonical stable-row grammar (Task 7): `T-001: \`file::selector\`` with an
     // optional trailing status suffix (`✅ PASS` / `⬜ TODO` / `❌ FAIL`). The
-    // suffix is captured and ignored here — the selector mapping only reads the
-    // backtick content, so status updates never corrupt TDD scoping.
-    const m = trimmed.match(/^([T#]\S+)\s*:\s*`([^`]+)`(?:\s+.+)?$/);
+    // suffix is captured-and-ignored here — the selector mapping only reads the
+    // backtick content, so status updates never corrupt TDD scoping. This exact
+    // regex is the canonical pattern shared by gate.mjs / detect.mjs / enforce.mjs
+    // / opencode.ts; keep the five in sync (review M3).
+    const m = trimmed.match(/^([T#]\S+)\s*:\s*`([^`]+)`(?:\s+(.+))?$/);
     if (!m) continue;
     const id = m[1];
     const selector = m[2].trim();
@@ -498,7 +500,11 @@ function changePrefixOf(state: PhaseState): string {
 
 /** A dated implementation plan, e.g. docs/superpowers/plans/2026-08-21-*.md. */
 function isDatedPlanPath(relPath: string): boolean {
-  const name = basename(relPath);
+  // 只认计划目录下的 dated plan（路径段边界 `plans/`），避免 amend 阶段放行工作区
+  // 任意位置的 YYYY-MM-DD-*.md（review M7）。
+  const norm = relPath.replace(/\\/g, '/');
+  if (!/(?:^|\/)plans\//.test(norm)) return false;
+  const name = basename(norm);
   return /^\d{4}-\d{2}-\d{2}-.*\.md$/.test(name);
 }
 
@@ -617,15 +623,27 @@ function isSelectorRegionUnfinished(content: string, sel: TestSelector): boolean
   }
   if (start === -1) return true; // cannot establish exact location -> conservative block
   let end = lines.length;
-  const nextDeclRe = /(?:^|\s)(?:test|it|describe)\s*\(|^\s*(?:async\s+)?def\s+\w+\s*\(|^\s*fn\s+\w+\s*\(|^\s*func\s+Test\w*\s*\(|@Test\b|#\[test\]/;
+  const nextDeclRe = /(?:^|\s)(?:test|it|describe)\s*\(|^\s*(?:async\s+)?def\s+\w+\s*\(|^\s*fn\s+\w+\s*\(|^\s*func\s+Test\w*\s*\(|#\[test\]/;
+  // JUnit `@Test` only marks the next declaration when its method declaration is
+  // on the same or the following line — a bare `@Test` inside a comment/string of
+  // the current test body must not truncate the region early (review M6).
+  const junitAnnotationRe = /^\s*@Test\b/;
+  const junitMethodRe = /^\s*(?:(?:public|protected|private)\s+)?(?:static\s+)?(?:void|boolean|int|long|float|double|char|byte|short|String|Object|List|Map|Set|[A-Z][\w<>[\], ]*)\s+\w+\s*\(/;
   for (let i = start + 1; i < lines.length; i++) {
     if (nextDeclRe.test(lines[i])) {
       end = i;
       break;
     }
+    if (junitAnnotationRe.test(lines[i]) && (junitMethodRe.test(lines[i]) || junitMethodRe.test(lines[i + 1] || ''))) {
+      end = i;
+      break;
+    }
   }
   const region = lines.slice(start, end).join('\n');
-  return /TODO|FAIL|assert\s*\(\s*false|assert\s+False\b|pending\s*\(/.test(region);
+  // Word boundaries keep string/comment words like FAILED / UNTODO from
+  // false-blocking a finished test; standalone TODO/FAIL markers still match
+  // (review M6).
+  return /\bTODO\b|\bFAIL\b|assert\s*\(\s*false|assert\s+False\b|pending\s*\(/.test(region);
 }
 
 /**

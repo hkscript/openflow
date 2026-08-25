@@ -35,7 +35,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { execSync, execFileSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { FINGERPRINT_VERSION, collectWorktreeFingerprint, validateVerifyReceipt } from './lifecycle-fingerprint.mjs';
 
 // ---- helpers ----
@@ -70,8 +70,10 @@ function errMsg(e) {
 // No-shell dispatch boundary: every OpenSpec invocation goes through this one
 // function. The binary comes from OPENFLOW_OPENSPEC_BIN (tests inject a fake),
 // never from a shell-interpolated string; argv is a fixed argument array.
+// On Windows npm installs `openspec.cmd` (not `openspec`), which execFileSync
+// would not resolve through PATHEXT (review M5).
 function runOpenspec(cwd, argv) {
-  const bin = process.env.OPENFLOW_OPENSPEC_BIN || 'openspec';
+  const bin = process.env.OPENFLOW_OPENSPEC_BIN || (process.platform === 'win32' ? 'openspec.cmd' : 'openspec');
   return execFileSync(bin, argv, { cwd, encoding: 'utf8', stdio: 'pipe' });
 }
 
@@ -139,7 +141,9 @@ function checkProposal(cwd, changeName) {
 // The canonical test-plan grammar emitted by the spec template: one stable row
 // per test case — `T-001: \`tests/auth/test_login.py::test_login_with_valid_credentials\`` —
 // optionally followed by a status suffix (`✅ PASS` / `⬜ TODO` / `❌ FAIL`).
-// This is the single source of truth shared by enforcement, Gate, and detect.
+// This exact regex is replicated in five places (gate.mjs / detect.mjs /
+// enforce.mjs / opencode.ts / rules.ts); keep them in sync (review M3). Here the
+// captured suffix drives pass/todo/fail stats.
 function parseCanonicalTestRows(content) {
   const out = [];
   for (const line of content.split('\n')) {
@@ -447,28 +451,44 @@ function extractFilePaths(content) {
   return [...paths];
 }
 
-// 基准分支：优先取 gate.config 的 base_branch，否则探测常见默认分支；都没有返回 null（退回只看未提交）
+// 基准分支来自 .openflow/gate.config.json（不可信数据）。使用前必须通过形态校验，
+// 并在拼接进 git diff 前解析成确定性 SHA —— 绝不把原始字符串做 shell 插值（review I1）。
+const BASE_REF_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+
+// 基准分支：优先取 gate.config 的 base_branch（校验形态），否则探测常见默认分支；
+// 都没有返回 null（退回只看未提交）。探测与解析均走 argv，不做 shell 拼接。
 function baseBranch(cwd, config) {
-  if (config && config.base_branch) return config.base_branch;
+  const cfg = config && config.base_branch;
+  if (cfg) return BASE_REF_RE.test(cfg) ? cfg : null;
   for (const b of ['main', 'master', 'origin/main', 'origin/master', 'develop', 'origin/develop']) {
     try {
-      execSync(`git rev-parse --verify --quiet ${b}`, { cwd, encoding: 'utf-8', stdio: 'pipe' });
+      execFileSync('git', ['rev-parse', '--verify', '--quiet', b], { cwd, encoding: 'utf-8', stdio: 'pipe' });
       return b;
     } catch { /* try next */ }
   }
   return null;
 }
 
-// 本次变更的文件：基准分支累计改动（含已提交）+ 未提交 + 已暂存
+// 把基准 ref 解析成确定性 commit SHA（仅 40 位 hex）；后续 diff 只拼接该 SHA，杜绝注入。
+function resolveBaseSha(cwd, base) {
+  if (!base) return null;
+  try {
+    const sha = execFileSync('git', ['rev-parse', '--verify', '--quiet', `${base}^{commit}`], { cwd, encoding: 'utf-8', stdio: 'pipe' }).trim();
+    return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+  } catch { return null; }
+}
+
+// 本次变更的文件：基准分支累计改动（含已提交）+ 未提交 + 已暂存。
+// 全部走 execFileSync argv，任何文件/分支名都不经 shell。
 function gitChangedFiles(cwd, config) {
   const files = [];
-  const cmds = [];
-  const base = baseBranch(cwd, config);
-  if (base) cmds.push(`git diff ${base}...HEAD --name-only`);
-  cmds.push('git diff --name-only', 'git diff --cached --name-only');
-  for (const cmd of cmds) {
+  const argvs = [];
+  const base = resolveBaseSha(cwd, baseBranch(cwd, config));
+  if (base) argvs.push(['diff', `${base}...HEAD`, '--name-only']);
+  argvs.push(['diff', '--name-only'], ['diff', '--cached', '--name-only']);
+  for (const argv of argvs) {
     try {
-      const out = execSync(cmd, { cwd, encoding: 'utf-8', stdio: 'pipe' });
+      const out = execFileSync('git', argv, { cwd, encoding: 'utf8', stdio: 'pipe' });
       for (const s of out.split('\n')) { const t = s.trim(); if (t) files.push(t); }
     } catch { /* ignore */ }
   }
@@ -601,26 +621,30 @@ function isControlKeyword(name) {
 // 太通用的方法调用不能当"改动链路"锚点（否则凡调用它们的方法全被报）
 const GENERIC_CALLEES = new Set(['get', 'set', 'is', 'has', 'put', 'add', 'remove', 'getOrDefault', 'ofNullable', 'orElse', 'orElseGet', 'orElseThrow', 'map', 'filter', 'collect', 'stream', 'forEach', 'toString', 'equals', 'hashCode', 'valueOf', 'size', 'isEmpty', 'contains', 'indexOf', 'substring', 'length', 'format', 'join', 'split', 'findFirst', 'findAny', 'parse', 'build', 'create', 'newInstance', 'close', 'open', 'println', 'print', 'log', 'info', 'warn', 'error', 'debug', 'execute', 'apply', 'run', 'accept', 'compareTo', 'compare', 'ifPresent', 'of', 'values', 'value', 'name', 'list', 'array', 'iterator', 'next', 'hasNext', 'forEachRemaining', 'reduce', 'sorted', 'distinct', 'limit', 'skip', 'anyMatch', 'allMatch', 'noneMatch', 'orElseThrow', 'optional', 'requireNonNull', 'empty', 'getAndSet', 'computeIfAbsent', 'computeIfPresent']);
 
-// 读取文件内容：HEAD ref 用 git show HEAD:<path>（已提交的 hunk 行号指 HEAD），否则读工作区
+// 读取文件内容：HEAD ref 用 git show HEAD:<path>（已提交的 hunk 行号指 HEAD），否则读工作区。
+// 走 argv 传参：文件名里的空格不会被 shell 拆开，恶意文件名也无法注入（review I1）。
 function fileContentAt(absPath, relFile, ref) {
   if (ref === 'HEAD') {
-    try { return execSync(`git show HEAD:${relFile}`, { encoding: 'utf-8', stdio: 'pipe' }); } catch { return null; }
+    try {
+      return execFileSync('git', ['show', `HEAD:${relFile}`], { encoding: 'utf-8', stdio: 'pipe' });
+    } catch { return null; }
   }
   return safeRead(absPath);
 }
 
-// 解析基准分支累计（ref=HEAD）+ 未提交 + 已暂存（ref=worktree）的 hunk（--unified=0，零依赖）；返回 { file, newStart, newCount, ref }
+// 解析基准分支累计（ref=HEAD）+ 未提交 + 已暂存（ref=worktree）的 hunk（--unified=0，零依赖）；
+// 返回 { file, newStart, newCount, ref }。git 调用全部走 execFileSync argv（review I1）。
 function diffHunks(cwd, config) {
   const seen = new Set();
   const hunks = [];
-  const cmds = [];
-  const base = baseBranch(cwd, config);
-  if (base) cmds.push({ cmd: `git diff ${base}...HEAD --no-ext-diff --unified=0`, ref: 'HEAD' });
-  cmds.push({ cmd: 'git diff --no-ext-diff --unified=0', ref: 'worktree' });
-  cmds.push({ cmd: 'git diff --cached --no-ext-diff --unified=0', ref: 'worktree' });
-  for (const { cmd, ref } of cmds) {
+  const argvs = [];
+  const base = resolveBaseSha(cwd, baseBranch(cwd, config));
+  if (base) argvs.push({ argv: ['diff', `${base}...HEAD`, '--no-ext-diff', '--unified=0'], ref: 'HEAD' });
+  argvs.push({ argv: ['diff', '--no-ext-diff', '--unified=0'], ref: 'worktree' });
+  argvs.push({ argv: ['diff', '--cached', '--no-ext-diff', '--unified=0'], ref: 'worktree' });
+  for (const { argv, ref } of argvs) {
     let out = '';
-    try { out = execSync(cmd, { cwd, encoding: 'utf-8', stdio: 'pipe' }); } catch { continue; }
+    try { out = execFileSync('git', argv, { cwd, encoding: 'utf8', stdio: 'pipe' }); } catch { continue; }
     let file = null;
     for (const line of out.split('\n')) {
       const fm = line.match(/^\+\+\+\s+(.*)$/);

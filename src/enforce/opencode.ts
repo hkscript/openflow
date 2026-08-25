@@ -292,9 +292,11 @@ function parseTestPlanRows(content: string): TestSelector[] {
     if (!trimmed) continue;
     // Canonical stable-row grammar (Task 7): `T-001: \`file::selector\`` with an
     // optional trailing status suffix (`✅ PASS` / `⬜ TODO` / `❌ FAIL`). The
-    // suffix is captured and ignored here — the selector mapping only reads the
-    // backtick content, so status updates never corrupt TDD scoping.
-    const m = trimmed.match(/^([T#]\S+)\s*:\s*`([^`]+)`(?:\s+.+)?$/);
+    // suffix is captured-and-ignored here — the selector mapping only reads the
+    // backtick content, so status updates never corrupt TDD scoping. This exact
+    // regex is the canonical pattern shared by gate.mjs / detect.mjs / enforce.mjs
+    // / opencode.ts; keep the five in sync (review M3).
+    const m = trimmed.match(/^([T#]\S+)\s*:\s*`([^`]+)`(?:\s+(.+))?$/);
     if (!m) continue;
     const id = m[1];
     const selector = m[2].trim();

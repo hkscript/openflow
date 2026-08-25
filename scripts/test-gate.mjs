@@ -620,7 +620,7 @@ function writeReceipt(dir, mutate) {
 function archiveFixture() {
   const { dir } = makeGateFixture();
   writeReceipt(dir);
-  write(dir, '.openflow/phase', JSON.stringify({ version: 1, change: 'add-widget', phase: 'verify', mode: 'bootstrap' }));
+  write(dir, '.openflow/phase', JSON.stringify({ version: 1, change: 'add-widget', phase: 'verify' }));
   return { dir };
 }
 
@@ -638,6 +638,25 @@ console.log('\n[7] 安全 argv 注入拒绝（runner 边界）');
       assert.equal(argvLog().length, 0, 'runner must not be invoked for an invalid change name');
     });
   }
+
+  // Review I1: gate.config.json 的 base_branch 是不可信数据，绝不 shell 插值。
+  run('恶意 base_branch 不执行 shell（降级为无基准 diff）', () => {
+    const { dir } = makeGateFixture();
+    write(dir, '.openflow/gate.config.json', JSON.stringify({ base_branch: 'main; touch pwned' }));
+    const marker = path.join(dir, 'pwned');
+    assert.ok(!fs.existsSync(marker));
+    const r = runGate(dir, 'check-verify-prerequisites', 'add-widget');
+    assert.ok(r && typeof r === 'object', JSON.stringify(r));
+    assert.ok(!fs.existsSync(marker), '恶意 base_branch 不得触发 shell 命令');
+    assert.equal(r.pass, true, JSON.stringify(r)); // 恶意 ref 被拒绝 -> 退回只看未提交
+  });
+
+  run('合法 base_branch 仍参与基准 diff（回归）', () => {
+    const { dir } = makeGateFixture();
+    write(dir, '.openflow/gate.config.json', JSON.stringify({ base_branch: 'main' }));
+    const r = runGate(dir, 'check-verify-prerequisites', 'add-widget');
+    assert.equal(r.pass, true, JSON.stringify(r));
+  });
 }
 
 console.log('\n[8] check-verify-prerequisites');

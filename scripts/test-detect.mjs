@@ -324,7 +324,9 @@ console.log('\n[6] verify receipt routing');
 
 // D1 review fix: receipt-driven verify/close routing applies ONLY to declared
 // verify/close phases. Every other declared phase (amend/spec/build) returns
-// its declared phase regardless of receipt validity/staleness.
+// its declared phase regardless of receipt validity/staleness. For those phases
+// the receipt is validated cheaply (shape + HEAD compare, no worktree
+// fingerprint), since receipt state cannot affect their routing (I4).
 
 run('phase=verify + 有效 receipt -> 路由 close', () => {
   const dir = makeGitWorkspace('add-widget');
@@ -361,15 +363,29 @@ run('phase=amend + 有效 receipt -> 仍路由 amend（phase 权威）', () => {
   assert.equal(json.suggested_phase, 'amend'); // NOT close
 });
 
-run('phase=amend + stale receipt -> 仍路由 amend（phase 权威）', () => {
+run('phase=amend + stale receipt（HEAD 变更）-> 仍路由 amend（phase 权威）', () => {
   const dir = makeGitWorkspace('add-widget');
   setPhase(dir, { version: 1, change: 'add-widget', phase: 'amend' });
   writeValidReceipt(dir, 'add-widget');
-  fs.appendFileSync(path.join(dir, 'src', 'app.js'), '// stale\n');
+  // 非 verify/close 阶段 receipt 走廉价校验（仅 HEAD 比对）：post-receipt commit 使其过期
+  write(dir, 'src/extra.js', 'console.log(2);\n');
+  git(dir, ['add', '.']);
+  git(dir, ['commit', '-qm', 'post-receipt']);
   const json = runDetect(dir);
   assert.equal(json.signals.verify_receipt.value.pass, false);
   assert.ok(contradictionIds(json).includes('receipt-stale'));
   assert.equal(json.suggested_phase, 'amend'); // NOT verify
+});
+
+run('非 verify/close 阶段：仅工作区漂移（未提交）-> 廉价校验按 HEAD 判定 pass true', () => {
+  const dir = makeGitWorkspace('add-widget');
+  setPhase(dir, { version: 1, change: 'add-widget', phase: 'amend' });
+  writeValidReceipt(dir, 'add-widget');
+  fs.appendFileSync(path.join(dir, 'src', 'app.js'), '// drift\n'); // 未提交的工作区漂移
+  const json = runDetect(dir);
+  // 廉价路径不计算 worktree fingerprint，工作区漂移不视为 stale；verify/close 阶段才做完整校验
+  assert.equal(json.signals.verify_receipt.value.pass, true, JSON.stringify(json.signals.verify_receipt));
+  assert.equal(json.suggested_phase, 'amend');
 });
 
 run('phase=spec + 有效 receipt -> 仍路由 spec（phase 权威）', () => {
@@ -381,11 +397,13 @@ run('phase=spec + 有效 receipt -> 仍路由 spec（phase 权威）', () => {
   assert.equal(json.suggested_phase, 'spec');
 });
 
-run('phase=spec + stale receipt -> 仍路由 spec（phase 权威）', () => {
+run('phase=spec + stale receipt（HEAD 变更）-> 仍路由 spec（phase 权威）', () => {
   const dir = makeGitWorkspace('add-widget');
   setPhase(dir, { version: 1, change: 'add-widget', phase: 'spec' });
   writeValidReceipt(dir, 'add-widget');
-  fs.appendFileSync(path.join(dir, 'src', 'app.js'), '// stale\n');
+  write(dir, 'src/extra.js', 'console.log(2);\n');
+  git(dir, ['add', '.']);
+  git(dir, ['commit', '-qm', 'post-receipt']);
   const json = runDetect(dir);
   assert.equal(json.signals.verify_receipt.value.pass, false);
   assert.ok(contradictionIds(json).includes('receipt-stale'));
@@ -404,14 +422,16 @@ run('phase=build/task-build + 有效 receipt -> 仍路由 build（phase 权威�
   assert.equal(json.suggested_phase, 'build'); // NOT close
 });
 
-run('phase=build/task-build + stale receipt -> 仍路由 build（phase 权威）', () => {
+run('phase=build/task-build + stale receipt（HEAD 变更）-> 仍路由 build（phase 权威）', () => {
   const dir = makeGitWorkspace('add-widget');
   write(dir, 'openspec/changes/add-widget/test-plan.md', TEST_PLAN_MIXED);
   write(dir, 'openspec/changes/add-widget/plan-ready.md', PLAN_READY_MIXED);
   setMarker(dir, 'add-widget');
   setPhase(dir, { version: 1, change: 'add-widget', phase: 'build', mode: 'task-build', task: '1' });
   writeValidReceipt(dir, 'add-widget');
-  fs.appendFileSync(path.join(dir, 'src', 'app.js'), '// post-verify edit\n');
+  write(dir, 'src/extra.js', 'console.log(2);\n');
+  git(dir, ['add', '.']);
+  git(dir, ['commit', '-qm', 'post-receipt']);
   const json = runDetect(dir);
   assert.equal(json.signals.verify_receipt.value.pass, false);
   assert.ok(contradictionIds(json).includes('receipt-stale'));

@@ -132,7 +132,7 @@ Add real-shape payload fixtures for Claude top-level fields, Claude nested `tool
 
 - [ ] **Step 2: Run the contract fixture and confirm it fails**
 
-Run: `pnpm run build && pnpm node scripts/test-enforce-rules.mjs`  
+Run: `pnpm run build && pnpm node scripts/test-enforce-rules.mjs`<br>
 Expected: FAIL because phase modes, path normalization, selector parsing, and exported contract functions do not exist.
 
 - [ ] **Step 3: Implement safe normalization and phase parsing**
@@ -179,7 +179,7 @@ Preserve compatibility only when phase is absent: retain existing no-read/certai
 
 - [ ] **Step 6: Run the focused rule tests and confirm they pass**
 
-Run: `pnpm run build && pnpm node scripts/test-enforce-rules.mjs`  
+Run: `pnpm run build && pnpm node scripts/test-enforce-rules.mjs`<br>
 Expected: PASS for phase repair-only behavior, bootstrap restrictions, selector isolation, unique legacy compatibility, ambiguous legacy rejection, and path safety cases.
 
 - [ ] **Step 7: Commit the reference contract**
@@ -222,7 +222,7 @@ Add failure fixtures for a Git command failure and unreadable untracked path. As
 
 - [ ] **Step 2: Run the vector fixture and confirm it fails**
 
-Run: `pnpm node scripts/test-gate.mjs`  
+Run: `pnpm node scripts/test-gate.mjs`<br>
 Expected: FAIL because `hooks/lifecycle-fingerprint.mjs` does not exist.
 
 - [ ] **Step 3: Implement versioned NUL-framed records**
@@ -248,7 +248,7 @@ Make `validateVerifyReceipt` first verify the exact receipt path, then return `r
 
 - [ ] **Step 5: Run the fingerprint and receipt vector tests**
 
-Run: `pnpm node scripts/test-gate.mjs`  
+Run: `pnpm node scripts/test-gate.mjs`<br>
 Expected: PASS for deterministic vectors, all stale cases, exact self-pollution exclusions, malformed receipt handling, and `receipt-change-mismatch`.
 
 - [ ] **Step 6: Commit the reusable lifecycle helper**
@@ -296,7 +296,7 @@ For `archive-verified`, cover mutation after readiness but before archive, faile
 
 - [ ] **Step 2: Run Gate fixtures and confirm failure**
 
-Run: `pnpm node scripts/test-gate.mjs`  
+Run: `pnpm node scripts/test-gate.mjs`<br>
 Expected: FAIL because the required commands and archive postconditions do not exist.
 
 - [ ] **Step 3: Add validated no-shell command dispatch**
@@ -342,7 +342,7 @@ If a postcondition fails, return failure and leave phase/marker intact for recov
 
 - [ ] **Step 6: Run Gate fixtures and confirm passing results**
 
-Run: `pnpm node scripts/test-gate.mjs`  
+Run: `pnpm node scripts/test-gate.mjs`<br>
 Expected: PASS for safe argv injection rejection, receipt writing, receipt freshness, archive error recovery, postconditions, and cleanup ordering.
 
 - [ ] **Step 7: Commit Gate lifecycle behavior**
@@ -383,7 +383,7 @@ Include invalid/missing/archived phase, phase repair, bootstrap declared/undecla
 
 - [ ] **Step 2: Run the three-way fixture and confirm it fails**
 
-Run: `pnpm run build && pnpm node scripts/test-enforce.mjs`  
+Run: `pnpm run build && pnpm node scripts/test-enforce.mjs`<br>
 Expected: FAIL because Claude and OpenCode lack phase-mode and selector behavior and do not expose complete comparable result vectors.
 
 - [ ] **Step 3: Implement Claude hook parity**
@@ -440,7 +440,7 @@ Cover absent phase, phase selection among multiple active changes, malformed/mis
 
 - [ ] **Step 2: Run detect tests and confirm failure**
 
-Run: `pnpm node scripts/test-detect.mjs`  
+Run: `pnpm node scripts/test-detect.mjs`<br>
 Expected: FAIL because detect has no phase mode or shared receipt information.
 
 - [ ] **Step 3: Implement phase-first selection and contradictions**
@@ -449,9 +449,11 @@ Import Task 2’s helper from `hooks/lifecycle-fingerprint.mjs`. When state is v
 
 A legal amend state does not require a marker. A stale receipt should route to `verify` when the phase is otherwise routable; a phase explicitly set to `close` with a stale receipt must have `suggested_phase: null` and a contradiction so a user must resolve it deliberately.
 
+> **已采纳偏差（偏离本 Task 原始措辞，commit b901045）**：实现中 receipt 只对**声明为 `verify` / `close`** 的阶段驱动路由——`verify` + 有效 receipt → `close`、`verify`/`close` + stale receipt → 保留 verify 或阻塞。**其他已声明阶段（amend/spec/build/proposal/brainstorming）一律 phase 权威**，无论 receipt 是否有效/过期都返回其声明阶段（receipt-stale 仅作为非阻塞矛盾提示）。这是有意为之且被测试锁定（test-detect.mjs 第 [6] 节）；后续有改动时请以此为准，不要回退成"全局路由到 verify"。
+
 - [ ] **Step 4: Run detect fixtures and confirm passing results**
 
-Run: `pnpm node scripts/test-detect.mjs`  
+Run: `pnpm node scripts/test-detect.mjs`<br>
 Expected: PASS for phase priority, allowed amend behavior, marker conflicts, and current/stale receipt routing.
 
 - [ ] **Step 5: Commit routing changes**
@@ -498,7 +500,7 @@ Seed legacy `.py` hooks and legacy relative OpenFlow plugin URLs, then assert th
 
 - [ ] **Step 2: Run installation tests and confirm failure**
 
-Run: `pnpm run build && pnpm node scripts/test-install.mjs`  
+Run: `pnpm run build && pnpm node scripts/test-install.mjs`<br>
 Expected: FAIL because OpenCode does not receive Gate/detect/fingerprint artifacts and global registration does not use the actual copied plugin destination.
 
 - [ ] **Step 3: Implement client-specific artifact copying and config merge**
@@ -513,7 +515,7 @@ Extend the installation fixture to run installed Claude hook, installed OpenCode
 
 - [ ] **Step 5: Run installation tests and confirm passing results**
 
-Run: `pnpm run build && pnpm node scripts/test-install.mjs`  
+Run: `pnpm run build && pnpm node scripts/test-install.mjs`<br>
 Expected: PASS for local/global configuration, deduplication, third-party preservation, artifact existence, and installed runtime behavior.
 
 - [ ] **Step 6: Commit installation behavior**
@@ -555,7 +557,7 @@ Assert the build ending directs users to `/openflow verify`, not `/openflow clos
 
 - [ ] **Step 2: Run template checks and confirm failure**
 
-Run: `pnpm node scripts/test-install.mjs`  
+Run: `pnpm node scripts/test-install.mjs`<br>
 Expected: FAIL because current templates omit phase modes, receipt writing, selector format, and verified archive commands.
 
 - [ ] **Step 3: Define phase lifecycle in template sources**
@@ -583,7 +585,7 @@ Make close instructions call only `archive-verified <change>`; explain its failu
 
 - [ ] **Step 5: Run template and install checks**
 
-Run: `pnpm run build && pnpm node scripts/test-install.mjs`  
+Run: `pnpm run build && pnpm node scripts/test-install.mjs`<br>
 Expected: PASS for static format, client paths, phase lifecycle, receipt writer, and verified archive assertions.
 
 - [ ] **Step 6: Commit template lifecycle documentation**
@@ -633,7 +635,7 @@ Replace every `spawnSync('node', ...)`, `execFileSync('node', ...)`, or shell no
 
 - [ ] **Step 3: Run the complete project test chain**
 
-Run: `pnpm test`  
+Run: `pnpm test`<br>
 Expected: TypeScript build and all five fixture suites exit `0`.
 
 - [ ] **Step 4: Verify built and installed OpenCode artifacts load**

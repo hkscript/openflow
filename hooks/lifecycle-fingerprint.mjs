@@ -233,9 +233,17 @@ export function readVerifyReceipt(cwd, changeName) {
 /**
  * Validate receipt shape, identity, and HEAD/fingerprint freshness.
  * Never throws on absent/malformed JSON or Git failures.
+ *
+ * `opts.cheap` (advisory-only freshness): used by detect for phases where
+ * receipt state cannot drive routing (everything except verify/close). The
+ * full worktree fingerprint (per-file diffs + sha256 of every untracked file)
+ * is skipped and replaced by a single HEAD compare — worktree-drift staleness
+ * stays authoritative in verify/close, where the full fingerprint is always
+ * computed. This keeps the detect hot path cheap once a receipt exists (I4).
+ *
  * @returns {{pass:boolean,blockers:string[],receipt?:object}}
  */
-export function validateVerifyReceipt(cwd, changeName) {
+export function validateVerifyReceipt(cwd, changeName, opts = {}) {
   const blockers = [];
   const read = readVerifyReceipt(cwd, changeName);
   if (!read.ok) {
@@ -289,12 +297,24 @@ export function validateVerifyReceipt(cwd, changeName) {
     }
 
     // Freshness: compare current HEAD + fingerprint; fail closed on Git errors.
-    const fp = collectWorktreeFingerprint(cwd, changeName);
-    if (!fp.ok) {
-      blockers.push(`fingerprint-collect-failed: ${fp.blocker}`);
+    if (opts.cheap) {
+      // Advisory-only (non-verify/close phases): HEAD compare is enough — a
+      // full worktree fingerprint cannot affect routing here.
+      let head = null;
+      try {
+        head = gitText(cwd, ['rev-parse', 'HEAD']).trim();
+      } catch (e) {
+        blockers.push(`fingerprint-collect-failed: ${errMsg(e)}`);
+      }
+      if (head !== null && receipt.head !== head) blockers.push('receipt-stale-head');
     } else {
-      if (receipt.head !== fp.head) blockers.push('receipt-stale-head');
-      if (receipt.fingerprint !== fp.value) blockers.push('receipt-stale-fingerprint');
+      const fp = collectWorktreeFingerprint(cwd, changeName);
+      if (!fp.ok) {
+        blockers.push(`fingerprint-collect-failed: ${fp.blocker}`);
+      } else {
+        if (receipt.head !== fp.head) blockers.push('receipt-stale-head');
+        if (receipt.fingerprint !== fp.value) blockers.push('receipt-stale-fingerprint');
+      }
     }
   }
 

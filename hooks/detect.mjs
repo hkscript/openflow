@@ -172,8 +172,9 @@ function collectTestPlanStats(changeDir) {
 
 /**
  * Parse canonical test-plan stable rows: `T-001: \`file::selector\`` optionally
- * followed by a status suffix (`✅ PASS` / `⬜ TODO` / `❌ FAIL`). Shares the same
- * grammar as enforcement (rules.ts / enforce.mjs / opencode.ts) and gate.mjs.
+ * followed by a status suffix (`✅ PASS` / `⬜ TODO` / `❌ FAIL`). The exact same
+ * regex is replicated in gate.mjs / enforce.mjs / opencode.ts / rules.ts — keep
+ * them in sync (review M3). Here the captured suffix drives pass/todo/fail stats.
  * Returns [{id, file, selector, status}]; empty array when no stable rows.
  */
 function parseCanonicalTestRows(content) {
@@ -765,8 +766,13 @@ function main() {
     signals.verify_issues = { value: collectVerifyIssues(cd), reliability: 'medium' };
     signals.lessons = { value: collectLessons(cd), reliability: 'low' };
 
+    // Receipt signal. Only verify/close phases route on receipt state, so the
+    // expensive worktree fingerprint is only computed there; other phases use
+    // the cheap HEAD-only validation (review I4).
+    const st = phaseState.state;
+    const receiptDrivesRouting = Boolean(st && (st.phase === 'verify' || st.phase === 'close'));
     signals.verify_receipt = {
-      value: validateVerifyReceipt(cwd, primaryChange.name),
+      value: validateVerifyReceipt(cwd, primaryChange.name, { cheap: !receiptDrivesRouting }),
       reliability: 'high',
     };
   }
