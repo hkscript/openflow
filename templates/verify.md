@@ -151,7 +151,7 @@ cargo test        # Rust
    printf '%s\n' '{"version":1,"change":"<变更名>","phase":"close"}' > .openflow/phase
    ```
 
-   失败则回到对应闸门修复后重跑 verify（verify 可反复跑），不要硬写 phase。receipt 绑定当前工作区指纹，receipt 后任何代码改动都会使 `check-verify-ready` 失败（stale）——归档前若有改动需重新 verify。
+   失败则回到对应闸门修复后重跑 verify（verify 可反复跑），不要硬写 phase。receipt 绑定当前工作区指纹，receipt 后任何代码改动都会使 `check-verify-ready` 失败（stale）——归档前若有改动需重新 verify。close 阶段生成的 `lessons.md`/`tasks.md` 属指纹豁免路径，不会触发 stale。
 
 ### 7. 通过
 

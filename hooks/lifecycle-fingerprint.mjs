@@ -31,15 +31,20 @@ import path from 'node:path';
 
 export const FINGERPRINT_VERSION = 1;
 
-// The only four exact self-pollution paths excluded from the fingerprint
-// (Global Constraints): .openflow/phase, .openflow/building, and the active
-// change's exact verify-issues.md / verify-result.json. Never .openflow/** broadly.
+// The exact self-pollution paths excluded from the fingerprint (Global
+// Constraints): .openflow/phase, .openflow/building, and the active change's
+// phase-boundary-allowed artifacts — verify-issues.md / verify-result.json
+// (verify phase) and lessons.md / tasks.md (close phase). These are written by
+// the workflow itself after receipt issuance, so excluding them keeps close's
+// lessons/tasks generation from staling a fresh receipt. Never .openflow/** broadly.
 function selfPollutionPaths(cwd, changeName) {
   return new Set([
     path.join(cwd, '.openflow', 'phase'),
     path.join(cwd, '.openflow', 'building'),
     path.join(cwd, 'openspec', 'changes', changeName, 'verify-issues.md'),
     path.join(cwd, 'openspec', 'changes', changeName, 'verify-result.json'),
+    path.join(cwd, 'openspec', 'changes', changeName, 'lessons.md'),
+    path.join(cwd, 'openspec', 'changes', changeName, 'tasks.md'),
   ]);
 }
 

@@ -129,7 +129,7 @@ node <base>/.claude/hooks/openflow-gate.mjs archive-verified <变更名>
 4. 全部通过后才清理 `.openflow/phase` 与 `.openflow/building`
 
 **禁止绕过**：不要用原始 `openspec archive <变更名> --yes` 或 `mv` 手动归档——那会跳过 receipt 复核，产生无验证归档。**`archive-verified` 失败必须修复后重新 `/openflow verify`（reverify），不能绕过。** 常见失败处理：
-- receipt stale（归档前有代码改动）→ 重新跑全量测试并重新 `write-verify-receipt`
+- receipt stale（归档前有**代码**改动；close 生成的 `lessons.md`/`tasks.md` 已在指纹豁免名单，不会使 receipt 过期）→ 重新跑全量测试并重新 `write-verify-receipt`
 - 源目录未移除 / 归档目录异常 → 检查 openspec 归档结果后重试
 - 缺 `tasks.md`/`lessons.md` → 先补上对应产物再归档
 

@@ -292,7 +292,7 @@ console.log('\n[2] 失败即 fail closed');
 console.log('\n[3] 精确自污染路径排除');
 
 {
-  run('四个精确自污染路径被排除 -> 指纹不变', () => {
+  run('六个精确自污染路径被排除 -> 指纹不变', () => {
     const dir = makeRepo();
     const before = collect(dir).value;
     write(dir, '.openflow/phase', JSON.stringify({
@@ -301,6 +301,8 @@ console.log('\n[3] 精确自污染路径排除');
     write(dir, '.openflow/building', 'add-widget');
     write(dir, 'openspec/changes/add-widget/verify-issues.md', '# issues\n');
     write(dir, 'openspec/changes/add-widget/verify-result.json', '{}');
+    write(dir, 'openspec/changes/add-widget/lessons.md', '# 经验\n');
+    write(dir, 'openspec/changes/add-widget/tasks.md', '- [x] 任务\n');
     assert.equal(collect(dir).value, before);
   });
 
@@ -325,6 +327,27 @@ console.log('\n[3] 精确自污染路径排除');
       userConfirmation: { received: true },
     };
     write(dir, 'openspec/changes/add-widget/verify-result.json', JSON.stringify(receipt, null, 2));
+    const v = fp.validateVerifyReceipt(dir, 'add-widget');
+    assert.equal(v.pass, true, JSON.stringify(v.blockers));
+  });
+
+  run('close 生成 lessons.md/tasks.md 后 receipt 仍 fresh（排除生效）', () => {
+    const dir = makeRepo();
+    const r = collect(dir);
+    const receipt = {
+      version: 1,
+      change: 'add-widget',
+      head: r.head,
+      fingerprint: r.value,
+      testRuns: [{ name: 'verify', exitCode: 0 }],
+      scenarioCoverage: { mapped: 3, total: 3 },
+      designConsistency: { pass: true, blockers: [] },
+      userConfirmation: { received: true },
+    };
+    write(dir, 'openspec/changes/add-widget/verify-result.json', JSON.stringify(receipt, null, 2));
+    // 模拟 close 步骤 1/2：归档前生成 lessons.md + tasks.md。
+    write(dir, 'openspec/changes/add-widget/lessons.md', '# 经验\n');
+    write(dir, 'openspec/changes/add-widget/tasks.md', '- [x] 任务\n');
     const v = fp.validateVerifyReceipt(dir, 'add-widget');
     assert.equal(v.pass, true, JSON.stringify(v.blockers));
   });
@@ -874,6 +897,22 @@ console.log('\n[11] archive-verified 归档事务');
       assert.ok(fs.existsSync(path.join(archiveDir, entries[0], f)), `missing ${f}`);
     }
     assert.equal(fs.existsSync(path.join(dir, '.openflow', 'phase')), false);
+  });
+
+  run('close 生成 lessons/tasks 后归档 -> 成功（排除生效）', () => {
+    const { dir } = archiveFixture();
+    // 模拟 close 步骤 1/2：归档前先写 lessons.md + tasks.md。
+    write(dir, 'openspec/changes/add-widget/lessons.md', '# 经验记录\n');
+    write(dir, 'openspec/changes/add-widget/tasks.md', '- [x] 任务\n');
+    const r = runGate(dir, 'archive-verified', 'add-widget');
+    assert.equal(r.pass, true, JSON.stringify(r.blockers));
+    assert.equal(fs.existsSync(path.join(dir, 'openspec', 'changes', 'add-widget')), false);
+    const archiveDir = path.join(dir, 'openspec', 'changes', 'archive');
+    const entries = fs.readdirSync(archiveDir);
+    assert.equal(entries.length, 1, JSON.stringify(entries));
+    for (const f of ['tasks.md', 'lessons.md', 'verify-result.json']) {
+      assert.ok(fs.existsSync(path.join(archiveDir, entries[0], f)), `missing ${f}`);
+    }
   });
 
   run('readiness 后改动 -> 归档失败 / archive 未调用 / 标记保留', () => {
