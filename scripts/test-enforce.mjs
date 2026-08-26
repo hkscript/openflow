@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 /**
- * Regression + three-way conformance tests for openflow enforcement adapters.
+ * Regression + four-way conformance tests for openflow enforcement adapters.
  *
  * Covers:
  *   [1] dependency-check 识别 superpowers 插件形式（不再误报缺失）
  *   [2] writing-plans-gate 防火墙：标记/缺失/排除路径/逃生舱 各场景
- *   [3] 三向一致性矩阵：shared rules / Claude enforce.mjs / OpenCode plugin
+ *   [3] 四向一致性矩阵：shared rules / Claude enforce.mjs / OpenCode plugin / Codex hook
  *       对每个 fixture 产出完全相同的 sorted level:id 向量。
  *
  * 用法：先 `pnpm run build`（[1] 依赖 dist/，[3] 依赖 dist/enforce/rules.js 与
- * dist/enforce/opencode.js），再 `pnpm node scripts/test-enforce.mjs`。
+ * dist/enforce/opencode.js / dist/enforce/codex.js），再 `pnpm node scripts/test-enforce.mjs`。
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -29,6 +29,7 @@ const HOOK = path.resolve(__dirname, '..', 'hooks', 'enforce.mjs');
 const DIST_DEP = path.resolve(__dirname, '..', 'dist', 'core', 'dependency-check.js');
 const DIST_RULES = path.resolve(__dirname, '..', 'dist', 'enforce', 'rules.js');
 const DIST_OPENCODE = path.resolve(__dirname, '..', 'dist', 'enforce', 'opencode.js');
+const DIST_CODEX = path.resolve(__dirname, '..', 'dist', 'enforce', 'codex.js');
 
 let passed = 0;
 let failed = 0;
@@ -69,6 +70,11 @@ function makeFakeSkill(dir) {
   // 本地伪 writing-plans skill，让 isWritingPlansAvailable 命中（不依赖真实插件）
   fs.mkdirSync(path.join(dir, '.claude', 'skills', 'writing-plans'), { recursive: true });
   fs.writeFileSync(path.join(dir, '.claude', 'skills', 'writing-plans', 'SKILL.md'), '# fake');
+}
+
+function makeAgentSkill(dir) {
+  fs.mkdirSync(path.join(dir, '.agents', 'skills', 'writing-plans'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.agents', 'skills', 'writing-plans', 'SKILL.md'), '# fake');
 }
 
 const srcPayload = { tool_name: 'Edit', file_path: 'src/foo.js', content: 'x' };
@@ -121,6 +127,16 @@ console.log('\n[2] writing-plans-gate 防火墙行为 (enforce.mjs)');
   const r = runHook(srcPayload, { cwd: dir, env: { OPENFLOW_FORCE_WP_MISSING: '1' } });
   ok('有标记 + 缺失 + 源码 -> exit 1', r.code === 1, `code=${r.code}`);
   ok('阻断文案含 writing-plans-gate', /writing-plans-gate/.test(r.stdout), `stdout=${r.stdout}`);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// 2c2. Agent Skills 标准目录同样解除 writing-plans gate
+{
+  const dir = makeTempDir();
+  makeMarker(dir);
+  makeAgentSkill(dir);
+  const r = runHook(srcPayload, { cwd: dir });
+  ok('有标记 + .agents writing-plans -> exit 0', r.code === 0, `code=${r.code} stdout=${r.stdout}`);
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
@@ -187,14 +203,15 @@ console.log('\n[2] writing-plans-gate 防火墙行为 (enforce.mjs)');
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
-// ---- [3] Three-way conformance matrix ----
-console.log('\n[3] 三向一致性矩阵 (rules / enforce.mjs / opencode)');
+// ---- [3] Four-way conformance matrix ----
+console.log('\n[3] 四向一致性矩阵 (rules / enforce.mjs / opencode / codex)');
 
-if (!fs.existsSync(DIST_RULES) || !fs.existsSync(DIST_OPENCODE)) {
+if (!fs.existsSync(DIST_RULES) || !fs.existsSync(DIST_OPENCODE) || !fs.existsSync(DIST_CODEX)) {
   console.log('  ⏭️  跳过：dist/enforce 未构建，请先 `pnpm run build`');
 } else {
   const rules = await import(pathToFileURL(DIST_RULES).href);
   const opencodePlugin = (await import(pathToFileURL(DIST_OPENCODE).href)).default;
+  const codex = await import(pathToFileURL(DIST_CODEX).href);
 
   // ---- fixture helpers ----
 
@@ -512,6 +529,18 @@ if (!fs.existsSync(DIST_RULES) || !fs.existsSync(DIST_OPENCODE)) {
     return fields;
   }
 
+  function buildCodexPayload(f) {
+    const header = f.operation === 'write' ? 'Add' : 'Update';
+    const body = f.content.split('\n').map((line) => `+${line}`);
+    const hunk = f.operation === 'edit' ? ['@@'] : [];
+    return {
+      tool_name: 'apply_patch',
+      tool_input: {
+        command: ['*** Begin Patch', `*** ${header} File: ${f.filePath}`, ...hunk, ...body, '*** End Patch'].join('\n'),
+      },
+    };
+  }
+
   function extractClaudeIds(stdout) {
     const ids = [];
     for (const line of stdout.split('\n')) {
@@ -537,6 +566,22 @@ if (!fs.existsSync(DIST_RULES) || !fs.existsSync(DIST_OPENCODE)) {
       if (m) ids.push(`warn:${m[1]}`);
     }
     // 与 extractClaudeIds 一致：保持适配器原生顺序，断言有序向量契约（review M2）。
+    return ids;
+  }
+
+  function extractCodexIds(stdout, stderr) {
+    const ids = [];
+    const collect = (text) => {
+      for (const line of text.split('\n')) {
+        const match = line.match(/^\[openflow (block|warn): ([a-z0-9-]+)\]/);
+        if (match) ids.push(`${match[1]}:${match[2]}`);
+      }
+    };
+    collect(stderr);
+    if (stdout) {
+      const parsed = JSON.parse(stdout);
+      collect(parsed?.hookSpecificOutput?.additionalContext || '');
+    }
     return ids;
   }
 
@@ -575,6 +620,19 @@ if (!fs.existsSync(DIST_RULES) || !fs.existsSync(DIST_OPENCODE)) {
     return extractOpenCodeIds(output, warns);
   }
 
+  function runCodexVector(f, dir) {
+    const result = spawnSync(process.execPath, [DIST_CODEX], {
+      cwd: dir,
+      input: JSON.stringify(buildCodexPayload(f)),
+      env: { ...process.env, ...(f.env || {}) },
+      encoding: 'utf8',
+    });
+    return {
+      code: result.status,
+      ids: extractCodexIds(result.stdout || '', result.stderr || ''),
+    };
+  }
+
   // ---- run the matrix ----
 
   for (const f of fixtures) {
@@ -593,12 +651,96 @@ if (!fs.existsSync(DIST_RULES) || !fs.existsSync(DIST_OPENCODE)) {
       );
 
       const opencode = await withEnv(env, () => runOpenCodeVector(f, dir));
+      const codexResult = runCodexVector(f, dir);
+      const codexExpectedCode = expected.some((entry) => entry.startsWith('block:')) ? 2 : 0;
 
       assert.deepEqual(claude, expected, `${f.name}: claude vector`);
       assert.deepEqual(opencode, expected, `${f.name}: opencode vector`);
+      assert.equal(codexResult.code, codexExpectedCode, `${f.name}: codex exit code`);
+      assert.deepEqual(codexResult.ids, expected, `${f.name}: codex vector`);
       ok(f.name, true);
     } catch (e) {
       ok(f.name, false, e && e.message ? e.message : e);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  await (async () => {
+    const parsed = codex.parseCodexApplyPatch({
+      tool_name: 'apply_patch',
+      tool_input: {
+        command: [
+          '*** Begin Patch',
+          '*** Add File: src/new.ts',
+          '+export const value = 1;',
+          '*** Update File: src/existing.ts',
+          '@@',
+          '+export const next = 2;',
+          '*** Delete File: src/obsolete.ts',
+          '*** Rename File: src/old.ts -> src/renamed.ts',
+          '*** End Patch',
+        ].join('\n'),
+      },
+    });
+    assert.equal(parsed.kind, 'ok', 'Codex patch should parse');
+    assert.deepEqual(parsed.targets.map((entry) => `${entry.operation}:${entry.filePath}`), [
+      'add:src/new.ts',
+      'update:src/existing.ts',
+      'delete:src/obsolete.ts',
+      'rename-from:src/old.ts',
+      'rename-to:src/renamed.ts',
+    ]);
+    ok('Codex patch parser covers Add/Update/Delete/Rename', true);
+  })().catch((error) => ok('Codex patch parser covers Add/Update/Delete/Rename', false, error.message));
+
+  await (async () => {
+    const dir = makeTempDir();
+    try {
+      makeChangeDir(dir);
+      writePhaseObj(dir, { version: 1, change: 'add-widget', phase: 'proposal' });
+      const result = spawnSync(process.execPath, [DIST_CODEX], {
+        cwd: dir,
+        input: JSON.stringify({
+          tool_name: 'apply_patch',
+          tool_input: {
+            command: [
+              '*** Begin Patch',
+              '*** Update File: openspec/changes/add-widget/proposal.md',
+              '@@',
+              '+allowed',
+              '*** Add File: src/forbidden.ts',
+              '+export const forbidden = true;',
+              '*** End Patch',
+            ].join('\n'),
+          },
+        }),
+        encoding: 'utf8',
+      });
+      assert.equal(result.status, 2, `exit=${result.status}`);
+      assert.match(result.stderr, /phase-boundary/, result.stderr);
+      ok('Codex mixed multi-file patch denies the full operation', true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  })().catch((error) => ok('Codex mixed multi-file patch denies the full operation', false, error.message));
+
+  for (const [name, command, expectedId] of [
+    ['malformed patch', '*** Begin Patch\n*** Add File: src/x.ts\n+x', 'codex-patch-parse'],
+    ['traversal patch target', '*** Begin Patch\n*** Add File: ../outside.ts\n+x\n*** End Patch', 'unsafe-path'],
+  ]) {
+    const dir = makeTempDir();
+    try {
+      const result = spawnSync(process.execPath, [DIST_CODEX], {
+        cwd: dir,
+        input: JSON.stringify({ tool_name: 'apply_patch', tool_input: { command } }),
+        encoding: 'utf8',
+      });
+      assert.equal(result.status, 2, `${name}: exit=${result.status}`);
+      assert.match(result.stderr, new RegExp(expectedId), `${name}: ${result.stderr}`);
+      ok(`Codex ${name} fails closed`, true);
+    } catch (error) {
+      ok(`Codex ${name} fails closed`, false, error.message);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

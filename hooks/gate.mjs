@@ -1293,6 +1293,8 @@ function checkWritingPlans(cwd) {
   const skillCandidates = [
     path.join(cwd, '.claude/skills/writing-plans/SKILL.md'),
     path.join(home, '.claude/skills/writing-plans/SKILL.md'),
+    path.join(cwd, '.agents/skills/writing-plans/SKILL.md'),
+    path.join(home, '.agents/skills/writing-plans/SKILL.md'),
     path.join(cwd, '.opencode/skills/writing-plans/SKILL.md'),
     path.join(home, '.config/opencode/skills/writing-plans/SKILL.md'),
   ];
@@ -1335,8 +1337,9 @@ function checkWritingPlans(cwd) {
     found_path: foundPath,
     install_hint: foundPath
       ? null
-      : 'Install: /plugin install superpowers@claude-plugins-official (recommended)\n'
-        + 'Or: download writing-plans to .claude/skills/writing-plans/SKILL.md',
+      : 'Install writing-plans in a client-recognized skill location.\n'
+        + 'Claude Code: /plugin install superpowers@claude-plugins-official\n'
+        + 'Codex/OpenCode compatible path: .agents/skills/writing-plans/SKILL.md',
   };
 }
 
@@ -1450,6 +1453,8 @@ function checkBrainstorming(cwd) {
   const skillCandidates = [
     path.join(cwd, '.claude/skills/brainstorming/SKILL.md'),
     path.join(home, '.claude/skills/brainstorming/SKILL.md'),
+    path.join(cwd, '.agents/skills/brainstorming/SKILL.md'),
+    path.join(home, '.agents/skills/brainstorming/SKILL.md'),
     path.join(cwd, '.opencode/skills/brainstorming/SKILL.md'),
     path.join(home, '.config/opencode/skills/brainstorming/SKILL.md'),
   ];

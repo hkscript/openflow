@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * Local/global Claude/OpenCode installation, config merge/idempotency, and
+ * Local/global Claude/OpenCode/Codex installation, config merge/idempotency, and
  * installed-artifact runtime fixtures — Task 6 of the phase lifecycle plan.
  *
  * Covers:
- *   [1] local install — all Claude + OpenCode artifacts copied
- *   [2] global install (isolated HOME) — artifacts under ~/.claude and ~/.config/opencode
+ *   [1] local install — Claude, OpenCode, and Codex artifacts copied
+ *   [2] global install (isolated HOME) — artifacts under each client root
  *   [3] config merge — third-party preservation, legacy .py hook cleanup,
  *       OpenFlow plugin URL canonicalization + dedup, byte-stable idempotency
  *   [4] installed runtime behavior — hook/plugin/gate/detect against a phase fixture
@@ -31,6 +31,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, '..');
 const CLI = path.join(REPO, 'bin', 'openflow.js');
 const DIST_OPENCODE = path.join(REPO, 'dist', 'enforce', 'opencode.js');
+const DIST_CODEX = path.join(REPO, 'dist', 'enforce', 'codex.js');
 
 let passed = 0;
 let failed = 0;
@@ -71,7 +72,7 @@ function fakeOpenspecBin() {
  * Run the compiled CLI (`bin/openflow.js` → `dist/cli/index.js`) with an
  * isolated HOME and a fake `openspec` on PATH, never via `openflow init`.
  */
-function runInit(cwd, home, { tools = ['claude', 'opencode'], global = false } = {}) {
+function runInit(cwd, home, { tools = ['claude', 'opencode', 'codex'], global = false } = {}) {
   const args = [CLI, 'init', '--tools', tools.join(',')];
   if (global) args.push('--global');
   return spawnSync(process.execPath, args, {
@@ -116,6 +117,12 @@ const LOCAL_ARTIFACTS = [
   '.opencode/hooks/openflow-detect.mjs',
   '.opencode/hooks/openflow-gate.mjs',
   '.opencode/hooks/lifecycle-fingerprint.mjs',
+  '.agents/skills/openflow/SKILL.md',
+  '.codex/hooks/openflow-codex-enforce.mjs',
+  '.codex/hooks/openflow-rules.mjs',
+  '.codex/hooks/openflow-detect.mjs',
+  '.codex/hooks/openflow-gate.mjs',
+  '.codex/hooks/lifecycle-fingerprint.mjs',
 ];
 
 const GLOBAL_ARTIFACTS = [
@@ -127,18 +134,27 @@ const GLOBAL_ARTIFACTS = [
   '.config/opencode/hooks/openflow-detect.mjs',
   '.config/opencode/hooks/openflow-gate.mjs',
   '.config/opencode/hooks/lifecycle-fingerprint.mjs',
+  '.agents/skills/openflow/SKILL.md',
+  '.codex/hooks/openflow-codex-enforce.mjs',
+  '.codex/hooks/openflow-rules.mjs',
+  '.codex/hooks/openflow-detect.mjs',
+  '.codex/hooks/openflow-gate.mjs',
+  '.codex/hooks/lifecycle-fingerprint.mjs',
 ];
 
 if (!fs.existsSync(DIST_OPENCODE)) {
   console.log('  ⚠️  未检测到 dist/enforce/opencode.js — 请先 `pnpm run build`（插件安装断言会失败）');
 }
+if (!fs.existsSync(DIST_CODEX)) {
+  console.log('  ⚠️  未检测到 dist/enforce/codex.js — 请先 `pnpm run build`（Codex 安装断言会失败）');
+}
 
 // ===========================================================================
 // [1] 本地安装
 // ===========================================================================
-console.log('\n[1] 本地安装 (Claude + OpenCode)');
+console.log('\n[1] 本地安装 (Claude + OpenCode + Codex)');
 
-await run('本地安装拷贝全部 8 个产物', () => {
+await run('本地安装拷贝全部客户端产物', () => {
   const home = tmpdir('openflow-home-');
   const proj = tmpdir('openflow-proj-');
   write(proj, 'openspec/.gitkeep', ''); // 跳过 openspec init 交互
@@ -147,6 +163,11 @@ await run('本地安装拷贝全部 8 个产物', () => {
   for (const rel of LOCAL_ARTIFACTS) {
     assert.ok(fs.existsSync(path.join(proj, rel)), `缺少产物 ${rel}`);
   }
+  const codexSkill = fs.readFileSync(path.join(proj, '.agents', 'skills', 'openflow', 'SKILL.md'), 'utf8');
+  assert.ok(codexSkill.includes('$openflow'), 'Codex skill 缺少 $openflow 入口');
+  assert.ok(codexSkill.includes('.codex/hooks/openflow-detect.mjs'), 'Codex skill 缺少 detect helper 路径');
+  assert.ok(!codexSkill.includes('.codex/skills'), 'Codex skill 仍引用旧 .codex/skills 路径');
+  assert.ok(!codexSkill.includes('**codex / cursor 只安装 skills**'), 'Codex skill 仍声明 lifecycle runtime 不可用');
 });
 
 // ===========================================================================
@@ -154,7 +175,7 @@ await run('本地安装拷贝全部 8 个产物', () => {
 // ===========================================================================
 console.log('\n[2] 全局安装 (隔离 HOME)');
 
-await run('全局安装拷贝全部产物到 ~/.claude 与 ~/.config/opencode', () => {
+await run('全局安装拷贝全部产物到 Claude、OpenCode 与 Codex 目录', () => {
   const home = tmpdir('openflow-global-home-');
   const proj = tmpdir('openflow-global-proj-');
   const res = runInit(proj, home, { global: true });
@@ -239,13 +260,41 @@ await run('OpenCode 插件 URL 规范化为 pathToFileURL(pluginDest).href，保
   assert.equal(openflowPlugins[0], canonical, `插件 URL = ${canonical}`);
 });
 
-await run('损坏的 settings.json / opencode.json 备份为 .bak，不整包覆盖用户配置', () => {
+await run('Codex hooks.json 保留第三方 entries 并精确注册一个 apply_patch hook', () => {
+  const home = tmpdir('openflow-home-');
+  const proj = tmpdir('openflow-proj-');
+  write(proj, 'openspec/.gitkeep', '');
+  write(proj, '.codex/hooks.json', JSON.stringify({
+    description: 'third-party hooks',
+    hooks: {
+      PreToolUse: [
+        { matcher: 'Bash', hooks: [{ type: 'command', command: 'third-party-bash' }] },
+        { matcher: 'apply_patch', hooks: [{ type: 'command', command: 'node /old/openflow-codex-enforce.mjs' }] },
+      ],
+    },
+  }, null, 2));
+
+  const res = runInit(proj, home, {});
+  assert.equal(res.status, 0, `init exit=${res.status}\nstderr=${res.stderr}`);
+
+  const config = JSON.parse(fs.readFileSync(path.join(proj, '.codex/hooks.json'), 'utf8'));
+  assert.equal(config.description, 'third-party hooks');
+  const bash = config.hooks.PreToolUse.find((entry) => entry.matcher === 'Bash');
+  assert.equal(bash.hooks[0].command, 'third-party-bash');
+  const applyPatch = config.hooks.PreToolUse.find((entry) => entry.matcher === 'apply_patch');
+  const openflow = applyPatch.hooks.filter((entry) => /openflow-codex-enforce\.mjs/.test(entry.command));
+  assert.equal(openflow.length, 1, 'apply_patch should have exactly one OpenFlow hook');
+  assert.match(openflow[0].command, /\.codex[\\/]hooks[\\/]openflow-codex-enforce\.mjs/, openflow[0].command);
+});
+
+await run('损坏的 client JSON 配置备份为 .bak，不整包覆盖用户配置', () => {
   const home = tmpdir('openflow-home-');
   const proj = tmpdir('openflow-proj-');
   write(proj, 'openspec/.gitkeep', '');
   // JSONC 风格（带尾逗号）：JSON.parse 失败，属手改/编辑器常见形态
   write(proj, '.claude/settings.json', '{\n  "hooks": { "PreToolUse": [ { "matcher": "Edit", "hooks": [{ "type": "command", "command": "node keep-me.mjs" }] } ] },\n}');
   write(proj, '.opencode/opencode.json', '{\n  "plugin": ["third-party-plugin"],\n}');
+  write(proj, '.codex/hooks.json', '{\n  "hooks": { "PreToolUse": [],\n}');
 
   const res = runInit(proj, home, {});
   assert.equal(res.status, 0, `init exit=${res.status}\nstderr=${res.stderr}`);
@@ -253,8 +302,10 @@ await run('损坏的 settings.json / opencode.json 备份为 .bak，不整包覆
   // 原文件被保留为 .bak，内容未丢
   const settingsBak = path.join(proj, '.claude/settings.json.bak');
   const opencodeBak = path.join(proj, '.opencode/opencode.json.bak');
+  const codexBak = path.join(proj, '.codex/hooks.json.bak');
   assert.ok(fs.existsSync(settingsBak), 'settings.json.bak 存在');
   assert.ok(fs.existsSync(opencodeBak), 'opencode.json.bak 存在');
+  assert.ok(fs.existsSync(codexBak), 'hooks.json.bak 存在');
   assert.match(fs.readFileSync(settingsBak, 'utf8'), /keep-me\.mjs/, '.bak 保留原第三方 hook');
   assert.match(fs.readFileSync(opencodeBak, 'utf8'), /third-party-plugin/, '.bak 保留原第三方插件');
 
@@ -263,9 +314,11 @@ await run('损坏的 settings.json / opencode.json 备份为 .bak，不整包覆
   const config = JSON.parse(fs.readFileSync(path.join(proj, '.opencode/opencode.json'), 'utf8'));
   assert.ok(Array.isArray(config.plugin), '新 opencode.json 为合法数组');
   assert.ok(config.plugin.some((p) => typeof p === 'string' && /openflow-enforce\.js/.test(p)), '新 opencode.json 注册 openflow 插件');
+  const codex = JSON.parse(fs.readFileSync(path.join(proj, '.codex/hooks.json'), 'utf8'));
+  assert.ok(codex.hooks.PreToolUse.some((entry) => entry.matcher === 'apply_patch'), '新 hooks.json 注册 apply_patch hook');
 });
 
-await run('二次安装幂等：settings.json 与 opencode.json 字节稳定', () => {
+await run('二次安装幂等：所有 client JSON 配置字节稳定', () => {
   const home = tmpdir('openflow-home-');
   const proj = tmpdir('openflow-proj-');
   write(proj, 'openspec/.gitkeep', '');
@@ -273,23 +326,30 @@ await run('二次安装幂等：settings.json 与 opencode.json 字节稳定', (
     hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'x' }] }] },
   }, null, 2));
   write(proj, '.opencode/opencode.json', JSON.stringify({ plugin: ['third-party-plugin'] }, null, 2));
+  write(proj, '.codex/hooks.json', JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'x' }] }] } }, null, 2));
 
   runInit(proj, home, {});
   const claude1 = fs.readFileSync(path.join(proj, '.claude/settings.json'), 'utf8');
   const opencode1 = fs.readFileSync(path.join(proj, '.opencode/opencode.json'), 'utf8');
+  const codex1 = fs.readFileSync(path.join(proj, '.codex/hooks.json'), 'utf8');
 
   runInit(proj, home, {});
   const claude2 = fs.readFileSync(path.join(proj, '.claude/settings.json'), 'utf8');
   const opencode2 = fs.readFileSync(path.join(proj, '.opencode/opencode.json'), 'utf8');
+  const codex2 = fs.readFileSync(path.join(proj, '.codex/hooks.json'), 'utf8');
 
   assert.equal(claude1, claude2, 'settings.json 字节稳定');
   assert.equal(opencode1, opencode2, 'opencode.json 字节稳定');
+  assert.equal(codex1, codex2, 'hooks.json 字节稳定');
 
   const settings = JSON.parse(claude2);
   for (const matcher of ['Edit', 'Write']) {
     const entry = settings.hooks.PreToolUse.find((h) => h.matcher === matcher);
     assert.equal(entry.hooks.filter((h) => /openflow-enforce\.mjs$/.test(h.command)).length, 1, `${matcher} 幂等仍恰好一个 hook`);
   }
+  const codex = JSON.parse(codex2);
+  const applyPatch = codex.hooks.PreToolUse.find((entry) => entry.matcher === 'apply_patch');
+  assert.equal(applyPatch.hooks.filter((entry) => /openflow-codex-enforce\.mjs/.test(entry.command)).length, 1, 'Codex 幂等仍恰好一个 hook');
 });
 
 await run('全局插件 URL 使用 ~/.config/opencode 实际拷贝位置', () => {
@@ -305,6 +365,9 @@ await run('全局插件 URL 使用 ~/.config/opencode 实际拷贝位置', () =>
   const canonical = pathToFileURL(pluginDest).href;
   const config = JSON.parse(fs.readFileSync(path.join(home, '.config/opencode/opencode.json'), 'utf8'));
   assert.equal(config.plugin.find((p) => typeof p === 'string' && /openflow-enforce\.js/.test(p)), canonical, `全局插件 URL = ${canonical}`);
+  const codex = JSON.parse(fs.readFileSync(path.join(home, '.codex/hooks.json'), 'utf8'));
+  const applyPatch = codex.hooks.PreToolUse.find((entry) => entry.matcher === 'apply_patch');
+  assert.match(applyPatch.hooks[0].command, new RegExp(path.join(home, '.codex', 'hooks', 'openflow-codex-enforce.mjs').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
 
 // ===========================================================================
@@ -362,6 +425,25 @@ await run('已安装 OpenCode 插件：spec 生产写入 → phase-boundary abor
     process.chdir(origCwd);
   }
   assert.ok(output.abort && /phase-boundary/.test(output.abort), `abort=${output.abort}`);
+});
+
+await run('已安装 Codex hook：apply_patch 的 spec 生产写入 → phase-boundary exit 2', () => {
+  const { proj } = makeRuntimeFixture();
+  makeChange(proj);
+  write(proj, '.openflow/phase', JSON.stringify({ version: 1, change: 'add-widget', phase: 'spec' }));
+  const hook = path.join(proj, '.codex', 'hooks', 'openflow-codex-enforce.mjs');
+  const res = spawnSync(process.execPath, [hook], {
+    cwd: proj,
+    input: JSON.stringify({
+      tool_name: 'apply_patch',
+      tool_input: {
+        command: ['*** Begin Patch', '*** Add File: src/prod.ts', '+export const value = 1;', '*** End Patch'].join('\n'),
+      },
+    }),
+    encoding: 'utf8',
+  });
+  assert.equal(res.status, 2, `hook exit=${res.status}`);
+  assert.match(res.stderr, /phase-boundary/, `stderr=${res.stderr}`);
 });
 
 await run('已安装 hook：task-build 缺失测试文件 → tdd-test-file-missing', () => {
@@ -452,6 +534,20 @@ await run('已安装 detect（OpenCode）：相对导入 lifecycle-fingerprint �
   assert.equal(JSON.parse(res.stdout).change_name, 'add-widget');
 });
 
+await run('已安装 detect（Codex）：相对导入 lifecycle-fingerprint 正常', () => {
+  const { proj } = makeRuntimeFixture();
+  makeChange(proj);
+  write(proj, '.openflow/phase', JSON.stringify({ version: 1, change: 'add-widget', phase: 'spec' }));
+  const detect = path.join(proj, '.codex', 'hooks', 'openflow-detect.mjs');
+  const res = spawnSync(process.execPath, [detect], {
+    cwd: proj,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(JSON.parse(res.stdout).change_name, 'add-widget');
+});
+
 // ===========================================================================
 // [5] 静态模板检查（Task 7：phase 生命周期 / 稳定选择器 / 客户端路径）
 // ===========================================================================
@@ -477,31 +573,34 @@ function readTemplate(rel) {
   return fs.readFileSync(p, 'utf8');
 }
 
-// Mirrors src/core/skill-generator.ts `replaceToolPaths`. Since Task 7 (review
-// F3), the hook-path rewrite is gated on lifecycle-runtime support: Claude and
-// OpenCode render their real hooks dir; codex/cursor render an explicit
-// unsupported marker instead of a phantom `.codex/hooks/…` executable path.
+// Mirrors src/core/skill-generator.ts `replaceToolPaths`. Codex keeps skills
+// under .agents but installs its lifecycle runtime under .codex.
 function renderForTool(tool) {
   const CFG = {
-    claude: { skillsDir: '.claude/skills', configDir: '.claude', hookRuntime: true },
-    codex: { skillsDir: '.codex/skills', configDir: '.codex', hookRuntime: false },
-    cursor: { skillsDir: '.cursor/skills', configDir: '.cursor', hookRuntime: false },
-    opencode: { skillsDir: '.opencode/skills', configDir: '.opencode', hookRuntime: true },
+    claude: { skillsDir: '.claude/skills', hooksDir: '.claude/hooks', hookRuntime: true },
+    codex: { skillsDir: '.agents/skills', hooksDir: '.codex/hooks', hookRuntime: true },
+    cursor: { skillsDir: '.cursor/skills', hooksDir: null, hookRuntime: false },
+    opencode: { skillsDir: '.opencode/skills', hooksDir: '.opencode/hooks', hookRuntime: true },
   };
-  const { skillsDir, configDir, hookRuntime } = CFG[tool];
-  const HOOK_MISSING_MARKER = 'hooks/（⚠️ 本客户端未安装 lifecycle 运行时：codex/cursor 仅安装 skills）';
+  const { skillsDir, hooksDir, hookRuntime } = CFG[tool];
+  const HOOK_MISSING_MARKER = 'hooks/(lifecycle runtime is not installed for this client)';
   return (content) => {
     let c = content
       .replace(/\.claude\/skills\/openflow\//g, `${skillsDir}/openflow/`)
       .replace(/~\/\.claude\/skills\/openflow\//g, `~/${skillsDir}/openflow/`);
     if (hookRuntime) {
       c = c
-        .replace(/\.claude\/hooks\//g, `${configDir}/hooks/`)
-        .replace(/~\/\.claude\/hooks\//g, `~/${configDir}/hooks/`);
+        .replace(/\.claude\/hooks\//g, `${hooksDir}/`)
+        .replace(/~\/\.claude\/hooks\//g, `~/${hooksDir}/`);
     } else {
       c = c
         .replace(/\.claude\/hooks\//g, HOOK_MISSING_MARKER)
         .replace(/~\/\.claude\/hooks\//g, HOOK_MISSING_MARKER);
+    }
+    if (tool === 'codex') {
+      c = c
+        .replace(/(^|[\s`])\/openflow(?=(?:[-\s`]|$))/gm, (_match, prefix) => `${prefix}$openflow`)
+        .replace('**codex / cursor 只安装 skills**', '**cursor 只安装 skills**');
     }
     return c;
   };
@@ -545,16 +644,30 @@ await run('渲染到 Claude：gate/detect 指向 .claude/hooks 已安装路径',
   assert.ok(render(readTemplate('SKILL.md')).includes('.claude/hooks/openflow-detect.mjs'), 'SKILL.md 渲染后无 claude detect 路径');
 });
 
-await run('渲染到 Codex/Cursor：无幻影 hooks 路径，显式标注 lifecycle 运行时不可用（F3）', () => {
-  for (const tool of ['codex', 'cursor']) {
-    const render = renderForTool(tool);
-    for (const rel of [...MAIN_TEMPLATES, ...SHORTCUT_TEMPLATES]) {
-      const rendered = render(readTemplate(rel));
-      assert.ok(!rendered.includes(`.${tool}/hooks/openflow-gate.mjs`), `${rel} 渲染后仍引用幻影 .${tool}/hooks gate 路径`);
-      assert.ok(!rendered.includes(`.${tool}/hooks/openflow-detect.mjs`), `${rel} 渲染后仍引用幻影 .${tool}/hooks detect 路径`);
-      if (GATE_TEMPLATES.has(rel) || rel === 'SKILL.md') {
-        assert.ok(rendered.includes('未安装 lifecycle 运行时'), `${rel} 渲染后无显式不可用标注`);
-      }
+await run('渲染到 Codex：skills 使用 .agents，gate/detect 使用 .codex，入口使用 $openflow', () => {
+  const render = renderForTool('codex');
+  for (const rel of [...MAIN_TEMPLATES, ...SHORTCUT_TEMPLATES]) {
+    const rendered = render(readTemplate(rel));
+    assert.ok(!rendered.includes('.claude/hooks'), `${rel} 渲染后仍引用 .claude/hooks`);
+    assert.ok(!rendered.includes('.codex/skills'), `${rel} 渲染后仍引用旧 .codex/skills`);
+    if (GATE_TEMPLATES.has(rel)) {
+      assert.ok(rendered.includes('.codex/hooks/openflow-gate.mjs'), `${rel} 渲染后无 Codex gate 路径`);
+    }
+    if (rel === 'SKILL.md') {
+      assert.ok(rendered.includes('.codex/hooks/openflow-detect.mjs'), 'SKILL.md 渲染后无 Codex detect 路径');
+      assert.ok(rendered.includes('$openflow'), 'SKILL.md 渲染后无 $openflow 入口');
+      assert.ok(!rendered.includes('**codex / cursor 只安装 skills**'), 'SKILL.md 仍将 Codex 标为 skills-only');
+    }
+  }
+});
+
+await run('渲染到 Cursor：无幻影 hooks 路径且保留 runtime 不可用标注', () => {
+  const render = renderForTool('cursor');
+  for (const rel of [...MAIN_TEMPLATES, ...SHORTCUT_TEMPLATES]) {
+    const rendered = render(readTemplate(rel));
+    assert.ok(!rendered.includes('.cursor/hooks/openflow-gate.mjs'), `${rel} 渲染后仍引用幻影 Cursor gate 路径`);
+    if (GATE_TEMPLATES.has(rel) || rel === 'SKILL.md') {
+      assert.ok(rendered.includes('lifecycle runtime is not installed'), `${rel} 渲染后无 runtime 不可用标注`);
     }
   }
 });

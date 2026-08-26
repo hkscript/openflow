@@ -1,7 +1,7 @@
 {
   "name": "@lininn/openflow",
   "version": "0.1.9",
-  "description": "OpenSpec + Superpowers workflow orchestrator for Claude Code",
+  "description": "OpenSpec + Superpowers workflow orchestrator for coding agents",
   "bin": {
     "openflow": "./bin/openflow.js"
   },
@@ -17,6 +17,8 @@
   },
   "keywords": [
     "claude-code",
+    "codex",
+    "opencode",
     "openspec",
     "superpowers",
     "workflow",

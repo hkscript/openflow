@@ -655,6 +655,8 @@ function isWritingPlansAvailable(cwd, home) {
   const skillCandidates = [
     path.join(cwd, '.claude/skills/writing-plans/SKILL.md'),
     path.join(home, '.claude/skills/writing-plans/SKILL.md'),
+    path.join(cwd, '.agents/skills/writing-plans/SKILL.md'),
+    path.join(home, '.agents/skills/writing-plans/SKILL.md'),
     path.join(cwd, '.opencode/skills/writing-plans/SKILL.md'),
     path.join(home, '.config/opencode/skills/writing-plans/SKILL.md'),
   ];

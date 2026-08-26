@@ -4,7 +4,7 @@ import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { fileExists } from '../utils/shell.js';
 import { logger } from '../utils/logger.js';
-import { SKILL_NAME, TOOL_PATHS } from './constants.js';
+import { SKILL_NAME, TOOL_PATHS, type ToolPaths } from './constants.js';
 import type { DepStatus } from './dependency-check.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -46,30 +46,30 @@ export function generateSkills(options: GenerateOptions): void {
       fs.mkdirSync(skillsDir, { recursive: true });
     }
 
-    // Lifecycle hook runtime (detect/gate/fingerprint) is installed for Claude
-    // (`.claude/hooks`) and OpenCode (`.opencode/hooks`); codex/cursor install
-    // skills only. `hasEnforceScript` is a stricter subset — only Claude gets an
-    // enforce hook script (OpenCode uses a plugin) — and drives the legacy .py
-    // reference removal.
-    const hasHookRuntime = Boolean(toolPaths.hooksDir) || tool === 'opencode';
-    const hasEnforceScript = Boolean(toolPaths.hooksDir);
+    const effectiveHooksDir = global && toolPaths.globalHooksDir
+      ? toolPaths.globalHooksDir
+      : toolPaths.hooksDir;
+    // Claude and Codex use command hooks; OpenCode uses a plugin plus the same
+    // helper scripts. Cursor remains skills-only.
+    const hasHookRuntime = Boolean(effectiveHooksDir) || tool === 'opencode';
+    const hasEnforceScript = tool === 'claude' || tool === 'codex';
 
     // Generate main SKILL.md
-    generateSkillFile(skillsDir, 'SKILL.md', depStatus, tool, effectiveSkillsDir, hasHookRuntime, hasEnforceScript);
+    generateSkillFile(skillsDir, 'SKILL.md', depStatus, tool, effectiveSkillsDir, effectiveHooksDir, hasHookRuntime, hasEnforceScript);
 
     // Generate phase files
     const phases = ['proposal', 'brainstorming', 'spec', 'amend', 'build', 'verify', 'close'];
     for (const phase of phases) {
-      generateSkillFile(skillsDir, `${phase}.md`, depStatus, tool, effectiveSkillsDir, hasHookRuntime, hasEnforceScript);
+      generateSkillFile(skillsDir, `${phase}.md`, depStatus, tool, effectiveSkillsDir, effectiveHooksDir, hasHookRuntime, hasEnforceScript);
     }
 
     // Generate sub-skill shortcuts (e.g., openflow-proposal, openflow-spec)
-    generateSubSkillShortcuts(baseDir, toolPaths, phases, depStatus, tool, effectiveSkillsDir, hasHookRuntime, hasEnforceScript);
+    generateSubSkillShortcuts(baseDir, toolPaths, phases, depStatus, tool, effectiveSkillsDir, effectiveHooksDir, hasHookRuntime, hasEnforceScript);
 
     logger.success(`${tool} skills generated`);
 
     // Install enforcement hooks
-    if (toolPaths.hooksDir && toolPaths.settingsFile) {
+    if (tool === 'claude' && toolPaths.hooksDir && toolPaths.settingsFile) {
       installHooks(baseDir, toolPaths, global);
     }
 
@@ -77,16 +77,21 @@ export function generateSkills(options: GenerateOptions): void {
     if (tool === 'opencode') {
       installOpencodeRuntime(baseDir, global, toolPaths);
     }
+
+    if (tool === 'codex') {
+      installCodexRuntime(baseDir, global, toolPaths);
+    }
   }
 }
 
 function generateSubSkillShortcuts(
   baseDir: string,
-  toolPaths: typeof TOOL_PATHS['claude'],
+  toolPaths: ToolPaths,
   phases: string[],
   depStatus: DepStatus,
   tool: string,
   effectiveSkillsDir: string,
+  effectiveHooksDir: string | undefined,
   hasHookRuntime: boolean,
   hasEnforceScript: boolean
 ): void {
@@ -111,7 +116,7 @@ function generateSubSkillShortcuts(
     }
 
     // Replace tool-specific paths in content
-    content = replaceToolPaths(content, effectiveSkillsDir, hasHookRuntime, hasEnforceScript);
+    content = replaceToolPaths(content, tool, effectiveSkillsDir, effectiveHooksDir, hasHookRuntime, hasEnforceScript);
 
     const targetPath = path.join(subSkillDir, 'SKILL.md');
     fs.writeFileSync(targetPath, content);
@@ -119,32 +124,40 @@ function generateSubSkillShortcuts(
   }
 }
 
-function replaceToolPaths(content: string, effectiveSkillsDir: string, hasHookRuntime: boolean, hasEnforceScript: boolean): string {
-  // Artifact root for the target tool: the skills dir minus its trailing
-  // "/skills" suffix (`.claude`, `.opencode`, or `.config/opencode`).
-  const configDir = effectiveSkillsDir.replace(/\/skills$/, '');
+function replaceToolPaths(
+  content: string,
+  tool: string,
+  effectiveSkillsDir: string,
+  effectiveHooksDir: string | undefined,
+  hasHookRuntime: boolean,
+  hasEnforceScript: boolean
+): string {
   // Replace local skill path references
   content = content.replace(/\.claude\/skills\/openflow\//g, `${effectiveSkillsDir}/openflow/`);
   // Replace global skill path references
   content = content.replace(/~\/\.claude\/skills\/openflow\//g, `~/${effectiveSkillsDir}/openflow/`);
-  // Replace hook path references (gate/detect/fingerprint/enforce) with the
-  // target tool's hooks root — but ONLY for clients that install a lifecycle
-  // runtime (Claude, OpenCode). codex/cursor install skills only: their
-  // rendered templates must not suggest executable phantom `.codex/hooks/…`
-  // paths, so hook-path references are replaced with an explicit unsupported
-  // marker instead (review F3).
-  const HOOK_MISSING_MARKER = 'hooks/（⚠️ 本客户端未安装 lifecycle 运行时：codex/cursor 仅安装 skills）';
-  if (hasHookRuntime) {
-    content = content.replace(/\.claude\/hooks\//g, `${configDir}/hooks/`);
-    content = content.replace(/~\/\.claude\/hooks\//g, `~/${configDir}/hooks/`);
+  // Skills and runtime files use different roots for Codex: skills live under
+  // .agents while hooks remain under .codex.
+  const HOOK_MISSING_MARKER = 'hooks/(lifecycle runtime is not installed for this client)';
+  if (hasHookRuntime && effectiveHooksDir) {
+    content = content.replace(/\.claude\/hooks\//g, `${effectiveHooksDir}/`);
+    content = content.replace(/~\/\.claude\/hooks\//g, `~/${effectiveHooksDir}/`);
   } else {
     content = content.replace(/\.claude\/hooks\//g, HOOK_MISSING_MARKER);
     content = content.replace(/~\/\.claude\/hooks\//g, HOOK_MISSING_MARKER);
   }
-  // For tools without an enforce hook script (OpenCode uses a plugin; codex/
-  // cursor have none), remove the legacy .py enforce reference sentence.
+  // For tools without an enforce hook script (OpenCode uses a plugin and
+  // Cursor has no lifecycle runtime), remove the legacy .py reference.
   if (!hasEnforceScript) {
     content = content.replace(/详见 `[^`]*hooks\/openflow-enforce\.py`。\n?/g, '');
+  }
+  if (tool === 'codex') {
+    content = content.replace(/(^|[\s`])\/openflow(?=(?:[-\s`]|$))/gm, (_match, prefix: string) => `${prefix}$openflow`);
+    content = content.replace(
+      'enforcement / gate / detect / receipt / archive 的**生命周期运行时**由 **Claude Code** 与 **OpenCode** 安装（hooks 目录随客户端安装自动生成）。**codex / cursor 只安装 skills**——不安装 hooks/plugin 运行时，其 openflow 流程是**提示词级指导**：gate/detect 脚本不可用，阶段写入边界、receipt、`archive-verified` 均不强制执行，相关命令退回手动检查。若本地没有 gate/detect 脚本（codex/cursor，或旧版未升级），跳过相关命令，按各阶段模板的「手动检查」降级执行。',
+      'Codex 安装 enforcement / gate / detect / receipt / archive 生命周期运行时。`apply_patch` 会在写入前执行阶段边界检查；gate、detect、receipt 与 `archive-verified` 可由 `.codex/hooks/` 下的 helpers 执行。首次安装或 hooks 更新后，必须通过 `/hooks` 审核并信任该仓库 hook；OpenFlow 不会绕过 Codex hook trust。'
+    );
+    content = content.replace('Claude hook / OpenCode plugin', 'Claude hook / OpenCode plugin / Codex hook');
   }
   return content;
 }
@@ -302,6 +315,92 @@ function mergeHooksConfig(settingsFile: string, hookScriptPath: string, oldPyHoo
   logger.step(`  Hooks registered in ${path.basename(settingsFile)}: Edit, Write → node openflow-enforce.mjs`);
 }
 
+function installCodexRuntime(baseDir: string, global: boolean, toolPaths: ToolPaths): void {
+  const hooksRelativeDir = global && toolPaths.globalHooksDir
+    ? toolPaths.globalHooksDir
+    : toolPaths.hooksDir;
+  const hooksConfigRelative = global && toolPaths.globalHooksConfigFile
+    ? toolPaths.globalHooksConfigFile
+    : toolPaths.hooksConfigFile;
+  if (!hooksRelativeDir || !hooksConfigRelative) {
+    logger.warn('Codex hook paths are not configured, skipping lifecycle runtime');
+    return;
+  }
+
+  const hooksDir = path.join(baseDir, hooksRelativeDir);
+  const hooksConfigPath = path.join(baseDir, hooksConfigRelative);
+  const display = (p: string) => global ? path.join('~', path.relative(baseDir, p)) : path.relative(baseDir, p);
+  const adapterSrc = path.resolve(__dirname, '..', 'enforce', 'codex.js');
+  const rulesSrc = path.resolve(__dirname, '..', 'enforce', 'rules.js');
+  const adapterDest = path.join(hooksDir, 'openflow-codex-enforce.mjs');
+  const rulesDest = path.join(hooksDir, 'openflow-rules.mjs');
+
+  if (!fs.existsSync(hooksDir)) {
+    fs.mkdirSync(hooksDir, { recursive: true });
+  }
+
+  if (!fileExists(adapterSrc) || !fileExists(rulesSrc)) {
+    logger.warn('Codex enforcement adapter not found in dist/enforce/, skipping hook registration — run `pnpm run build` first');
+  } else {
+    const adapter = fs.readFileSync(adapterSrc, 'utf8');
+    const renderedAdapter = adapter.replace("from './rules.js'", "from './openflow-rules.mjs'");
+    if (renderedAdapter === adapter) {
+      logger.warn('Codex enforcement adapter did not contain the expected rules import, skipping hook registration');
+    } else {
+      fs.writeFileSync(adapterDest, renderedAdapter);
+      fs.copyFileSync(rulesSrc, rulesDest);
+      fs.chmodSync(adapterDest, 0o755);
+      fs.chmodSync(rulesDest, 0o755);
+      logger.step(`  Codex enforcement adapter: ${display(adapterDest)}`);
+      mergeCodexHooksConfig(hooksConfigPath, adapterDest);
+    }
+  }
+
+  copyHookScript(hooksDir, 'detect.mjs', 'openflow-detect.mjs', display, 'Detect script');
+  copyHookScript(hooksDir, 'gate.mjs', 'openflow-gate.mjs', display, 'Gate script');
+  copyHookScript(hooksDir, 'lifecycle-fingerprint.mjs', 'lifecycle-fingerprint.mjs', display, 'Fingerprint helper');
+}
+
+function mergeCodexHooksConfig(hooksConfigPath: string, adapterPath: string): void {
+  let config: any = {};
+  const parsed = parseJsonConfig(hooksConfigPath, 'hooks.json');
+  if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) config = parsed;
+
+  if (config.hooks === undefined) config.hooks = {};
+  if (typeof config.hooks !== 'object' || config.hooks === null || Array.isArray(config.hooks)) {
+    logger.warn(`hooks.json has a non-object hooks field (${hooksConfigPath}), preserving it and skipping OpenFlow hook registration`);
+    return;
+  }
+  if (config.hooks.PreToolUse === undefined) config.hooks.PreToolUse = [];
+  if (!Array.isArray(config.hooks.PreToolUse)) {
+    logger.warn(`hooks.json has a non-array PreToolUse field (${hooksConfigPath}), preserving it and skipping OpenFlow hook registration`);
+    return;
+  }
+
+  const groups: any[] = config.hooks.PreToolUse;
+  const ownsAdapter = (handler: unknown) => typeof (handler as any)?.command === 'string'
+    && /openflow-codex-enforce\.mjs["']?$/.test((handler as any).command);
+  for (const group of groups) {
+    if (group && typeof group === 'object' && Array.isArray(group.hooks)) {
+      group.hooks = group.hooks.filter((handler: unknown) => !ownsAdapter(handler));
+    }
+  }
+
+  let group = groups.find((entry: any) => entry?.matcher === 'apply_patch' && Array.isArray(entry.hooks));
+  if (!group) {
+    group = { matcher: 'apply_patch', hooks: [] };
+    groups.push(group);
+  }
+  group.hooks.push({
+    type: 'command',
+    command: `node ${JSON.stringify(adapterPath)}`,
+    statusMessage: 'Checking OpenFlow workflow policy',
+  });
+
+  fs.writeFileSync(hooksConfigPath, JSON.stringify(config, null, 2) + '\n');
+  logger.step(`  Hooks registered in ${path.basename(hooksConfigPath)}: apply_patch → node openflow-codex-enforce.mjs`);
+}
+
 function installOpencodeRuntime(baseDir: string, global: boolean, toolPaths: typeof TOOL_PATHS['opencode']): void {
   const configBase = global && toolPaths.globalSkillsDir
     ? path.dirname(toolPaths.globalSkillsDir)  // ".config/opencode"
@@ -366,7 +465,16 @@ function mergeOpencodePluginConfig(opencodeJsonPath: string, pluginDest: string)
   logger.step(`  Plugin registered in opencode.json: ${canonical}`);
 }
 
-function generateSkillFile(skillsDir: string, filename: string, depStatus: DepStatus, tool?: string, effectiveSkillsDir?: string, hasHookRuntime?: boolean, hasEnforceScript?: boolean): void {
+function generateSkillFile(
+  skillsDir: string,
+  filename: string,
+  depStatus: DepStatus,
+  tool?: string,
+  effectiveSkillsDir?: string,
+  effectiveHooksDir?: string,
+  hasHookRuntime?: boolean,
+  hasEnforceScript?: boolean
+): void {
   const templatePath = path.join(TEMPLATES_DIR, filename);
 
   let content: string;
@@ -379,8 +487,15 @@ function generateSkillFile(skillsDir: string, filename: string, depStatus: DepSt
   }
 
   // Replace tool-specific paths
-  if (effectiveSkillsDir) {
-    content = replaceToolPaths(content, effectiveSkillsDir, Boolean(hasHookRuntime), Boolean(hasEnforceScript));
+  if (effectiveSkillsDir && tool) {
+    content = replaceToolPaths(
+      content,
+      tool,
+      effectiveSkillsDir,
+      effectiveHooksDir,
+      Boolean(hasHookRuntime),
+      Boolean(hasEnforceScript)
+    );
   }
 
   // Inject validation hint into spec.md for OpenSpec CLI

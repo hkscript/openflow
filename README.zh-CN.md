@@ -16,22 +16,22 @@ npm install -g @lininn/openflow
 
 ```bash
 cd your-project
-openflow init --tools claude
+openflow init --tools claude,codex,opencode
 ```
 
 `init` 会自动：
 1. 检测并引导安装 OpenSpec CLI
 2. 检测 Superpowers 并提示安装方式
 3. 检测项目 OpenSpec 初始化状态
-4. 生成 openflow skills 到所选工具的项目级 skill 目录，如 `.claude/skills/openflow/`、`.codex/skills/openflow/` 或 `.cursor/skills/openflow/`
+4. 为所选客户端生成 OpenFlow skills 和生命周期运行时产物
 
-支持的工具：`claude`、`codex`、`cursor`（逗号分隔，如 `--tools claude,codex`）
+支持的工具：`claude`、`codex`、`opencode`、`cursor`（逗号分隔）
 
 ### 安装到全局 skills
 
 ```bash
 openflow init --tools claude -g
-openflow init --tools claude,codex,cursor --global
+openflow init --tools claude,codex,opencode,cursor --global
 ```
 
 加 `-g` / `--global` 后，`openflow` 会把 skills 安装到所选工具的全局目录：
@@ -39,8 +39,23 @@ openflow init --tools claude,codex,cursor --global
 | 工具 | 全局 skill 路径 |
 |------|-----------------|
 | `claude` | `~/.claude/skills/openflow/` |
-| `codex` | `~/.codex/skills/openflow/` |
+| `codex` | `~/.agents/skills/openflow/` |
+| `opencode` | `~/.config/opencode/skills/openflow/` |
 | `cursor` | `~/.cursor/skills/openflow/` |
+
+### 客户端运行时支持
+
+| 客户端 | Skills | 生命周期运行时 | 调用方式 |
+|--------|--------|----------------|----------|
+| `claude` | `.claude/skills/` | `.claude/hooks/` | `/openflow ...` |
+| `codex` | `.agents/skills/` | `.codex/hooks/` + `.codex/hooks.json` | `$openflow ...` 或 `/skills` |
+| `opencode` | `.opencode/skills/` | `.opencode/plugins/` 和 `.opencode/hooks/` | 自然语言触发 skill |
+| `cursor` | `.cursor/skills/` | 不安装 | 客户端 skill 选择 |
+
+Codex 会为 `apply_patch` 注册 hook。安装或更新后，必须在 Codex 中用
+`/hooks` 审核并信任仓库 hook；OpenFlow 不会启用绕过 hook trust 的参数。
+既有 `.codex/skills/` 目录不会被删除，但新的 Codex skills 将生成到
+`.agents/skills/`。
 
 ### 查看状态
 
@@ -79,7 +94,7 @@ Works without them: yes, with manual-file fallback
 | 依赖 | 安装方式 | 缺失时降级 |
 |------|----------|-----------|
 | OpenSpec | `npm install -g @fission-ai/openspec@latest` | 手动创建 `openspec/changes/` 目录和文件 |
-| Superpowers | `/plugin install superpowers@claude-plugins-official` | build 阶段手动拆解 plan-ready.md 步骤执行 |
+| Superpowers | Claude：`/plugin install superpowers@claude-plugins-official`；其他客户端：安装 loose `writing-plans` skill | build 阶段手动拆解 plan-ready.md 步骤执行 |
 
 ### 双层依赖保障
 

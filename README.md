@@ -16,22 +16,22 @@ npm install -g @lininn/openflow
 
 ```bash
 cd your-project
-openflow init --tools claude
+openflow init --tools claude,codex,opencode
 ```
 
 `init` will automatically:
 1. Detect and guide OpenSpec CLI installation
 2. Detect Superpowers and show install instructions
 3. Check if OpenSpec is initialized in the project
-4. Generate openflow skills to the selected tools' local skill directories, such as `.claude/skills/openflow/`, `.codex/skills/openflow/`, or `.cursor/skills/openflow/`
+4. Generate OpenFlow skills and lifecycle runtime artifacts for the selected clients
 
-Supported tools: `claude`, `codex`, `cursor` (comma-separated, e.g. `--tools claude,codex`)
+Supported tools: `claude`, `codex`, `opencode`, `cursor` (comma-separated)
 
 ### Install skills globally
 
 ```bash
 openflow init --tools claude -g
-openflow init --tools claude,codex,cursor --global
+openflow init --tools claude,codex,opencode,cursor --global
 ```
 
 With `-g` / `--global`, `openflow` installs skills under the selected tools' home directories:
@@ -39,8 +39,23 @@ With `-g` / `--global`, `openflow` installs skills under the selected tools' hom
 | Tool | Global skill path |
 |------|-------------------|
 | `claude` | `~/.claude/skills/openflow/` |
-| `codex` | `~/.codex/skills/openflow/` |
+| `codex` | `~/.agents/skills/openflow/` |
+| `opencode` | `~/.config/opencode/skills/openflow/` |
 | `cursor` | `~/.cursor/skills/openflow/` |
+
+### Client runtime support
+
+| Client | Skills | Lifecycle runtime | Invocation |
+|--------|--------|-------------------|------------|
+| `claude` | `.claude/skills/` | `.claude/hooks/` | `/openflow ...` |
+| `codex` | `.agents/skills/` | `.codex/hooks/` + `.codex/hooks.json` | `$openflow ...` or `/skills` |
+| `opencode` | `.opencode/skills/` | `.opencode/plugins/` and `.opencode/hooks/` | Natural-language skill selection |
+| `cursor` | `.cursor/skills/` | Not installed | Client skill selection |
+
+Codex hooks are registered for `apply_patch`. After installing or updating,
+review and trust the repository hook with Codex `/hooks`; OpenFlow never enables
+the hook-trust bypass. Existing legacy `.codex/skills/` directories are left
+untouched, but new Codex skills are generated under `.agents/skills/`.
 
 ### Check status
 
@@ -79,7 +94,7 @@ Works without them: yes, with manual-file fallback
 | Dependency | Install | Fallback when missing |
 |------------|---------|----------------------|
 | OpenSpec | `npm install -g @fission-ai/openspec@latest` | Manually create `openspec/changes/` directories and files |
-| Superpowers | `/plugin install superpowers@claude-plugins-official` | Manually break down plan-ready.md steps in build phase |
+| Superpowers | Claude: `/plugin install superpowers@claude-plugins-official`; other clients: install a loose `writing-plans` skill | Manually break down plan-ready.md steps in build phase |
 
 ### Dual-layer dependency check
 

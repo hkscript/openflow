@@ -20,12 +20,25 @@ export const DEPS = {
     installedPluginsFile: '.claude/plugins/installed_plugins.json',
     pluginNamePrefix: 'superpowers@',
     pluginSkillPath: 'skills/writing-plans/SKILL.md',
-    installHint: '请在当前工具中安装 Superpowers writing-plans skill（Claude Code: /plugin install superpowers@claude-plugins-official）',
+    installHint: '请将 Superpowers writing-plans 安装到当前客户端可发现的 skills 目录（Claude Code 可用：/plugin install superpowers@claude-plugins-official）',
     autoInstallable: false,
   },
 } as const;
 
-export const TOOL_PATHS: Record<string, { skillsDir: string; globalSkillsDir?: string; commandsDir?: string; globalCommandsDir?: string; hooksDir?: string; settingsFile?: string }> = {
+export interface ToolPaths {
+  skillsDir: string;
+  globalSkillsDir?: string;
+  commandsDir?: string;
+  globalCommandsDir?: string;
+  hooksDir?: string;
+  globalHooksDir?: string;
+  settingsFile?: string;
+  globalSettingsFile?: string;
+  hooksConfigFile?: string;
+  globalHooksConfigFile?: string;
+}
+
+export const TOOL_PATHS: Record<string, ToolPaths> = {
   claude: {
     skillsDir: '.claude/skills',
     commandsDir: '.claude/commands',
@@ -33,7 +46,14 @@ export const TOOL_PATHS: Record<string, { skillsDir: string; globalSkillsDir?: s
     settingsFile: '.claude/settings.json',
   },
   codex: {
-    skillsDir: '.codex/skills',
+    // Codex discovers standalone local skills through the agent-skills
+    // standard. Runtime configuration remains under .codex.
+    skillsDir: '.agents/skills',
+    globalSkillsDir: '.agents/skills',
+    hooksDir: '.codex/hooks',
+    globalHooksDir: '.codex/hooks',
+    hooksConfigFile: '.codex/hooks.json',
+    globalHooksConfigFile: '.codex/hooks.json',
   },
   cursor: {
     skillsDir: '.cursor/skills',
