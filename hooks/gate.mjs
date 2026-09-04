@@ -164,6 +164,86 @@ function parseCanonicalTestRows(content) {
   return out;
 }
 
+// Parse plan-ready task blocks: `### Task N: <name>` plus the canonical
+// `- Test cases: T-001, …` and `- Files: <paths>` fields.
+function parsePlanReadyTaskBlocks(content) {
+  const tasks = [];
+  let cur = null;
+  for (const line of content.split('\n')) {
+    const h = line.match(/^###\s*Task\s+(\d+)\s*:/);
+    if (h) {
+      cur = { label: `Task ${h[1]}`, testIds: [], files: [] };
+      tasks.push(cur);
+      continue;
+    }
+    if (!cur) continue;
+    const tc = line.match(/^\s*-\s*Test cases?\s*:\s*(.+)$/i);
+    if (tc) {
+      for (const tok of tc[1].split(/[,\s]+/)) {
+        const t = tok.trim().replace(/^`|`$/g, '');
+        if (/^(?:T-\d+|#\d+)$/.test(t)) cur.testIds.push(t);
+      }
+      continue;
+    }
+    const fl = line.match(/^\s*-\s*Files?\s*:\s*(.+)$/i);
+    if (fl) {
+      for (const tok of fl[1].split(',')) {
+        const p = tok.trim().replace(/^`|`$/g, '');
+        if (p) cur.files.push(p);
+      }
+    }
+  }
+  return tasks;
+}
+
+// Mirror the enforcement owner-map rule (rules.ts): one selector must belong to
+// exactly one stable id. Exposed early so spec/amend gates catch it before build.
+function findDuplicateSelectorIssues(rows) {
+  const ownerMap = new Map();
+  for (const r of rows) {
+    const list = ownerMap.get(r.selector) ?? [];
+    list.push(r.id);
+    ownerMap.set(r.selector, list);
+  }
+  const issues = [];
+  for (const [selector, ids] of ownerMap) {
+    if (ids.length > 1) {
+      issues.push({
+        type: 'duplicate_selector',
+        detail: `test-plan 中同一选择器被多个 id 拥有: ${selector} (${ids.join(', ')})`,
+      });
+    }
+  }
+  return issues;
+}
+
+// Non-blocking consistency hint: canonical machine rows (`T-001: \`file::fn\``)
+// vs the human traceability table's backticked `file::fn`. Free-form tables are
+// informational, so mismatches surface as warnings, never as blockers.
+function findTraceabilityWarnings(tpContent, rows) {
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const warnings = [];
+  for (const line of tpContent.split('\n')) {
+    const m = line.match(/^\|\s*(T-\d+|#\d+)\s*\|/);
+    if (!m) continue;
+    const id = m[1];
+    const row = byId.get(id);
+    if (!row) continue;
+    const tm = line.match(/`([^`]+?)::([^`]+)`/);
+    if (!tm) continue;
+    const sep = row.selector.lastIndexOf('::');
+    const rowFn = sep === -1 ? '' : row.selector.slice(sep + 2);
+    const tableFn = tm[2].trim();
+    if (rowFn && rowFn !== tableFn) {
+      warnings.push({
+        type: 'traceability_mismatch',
+        detail: `${id} 机器行函数 ${rowFn} 与追溯表函数 ${tableFn} 不一致`,
+      });
+    }
+  }
+  return warnings;
+}
+
 // ---- check-test-plan ----
 
 function checkTestPlan(cwd, changeName) {
@@ -222,6 +302,9 @@ function checkTestPlan(cwd, changeName) {
   const issues = [];
   if (total === 0) issues.push({ type: 'empty', detail: 'No test rows found in table' });
   if (fail > 0) issues.push({ type: 'has_failures', detail: `${fail} test(s) marked FAIL` });
+  if (rows.length > 0) {
+    for (const d of findDuplicateSelectorIssues(rows)) issues.push(d);
+  }
 
   // Firewall: check actual test files for TODO stubs
   const stubIssues = [];
@@ -287,22 +370,33 @@ function checkCrossRef(cwd, changeName) {
     }
   }
 
-  // Extract references from plan-ready: `- Test cases: T-001, T-002` tokens
+  // Extract references per plan-ready task: `- Test cases: T-001, T-002`
   // (canonical), plus legacy `#N` references only when the test-plan itself is
   // in legacy numeric form (so a mixed plan never reports false orphans).
+  const tasks = parsePlanReadyTaskBlocks(prContent);
+  const binding = new Map(); // id -> task labels that reference it
   const refIds = new Set();
-  const tcRe = /Test cases?\s*:\s*([^\n]*)/gi;
-  for (const m of prContent.matchAll(tcRe)) {
-    for (const tok of m[1].split(/[,\s]+/)) {
-      const t = tok.trim().replace(/^`|`$/g, '');
-      if (/^(?:T-\d+|#\d+)$/.test(t)) refIds.add(t);
+  for (const task of tasks) {
+    for (const id of task.testIds) {
+      refIds.add(id);
+      const list = binding.get(id) ?? [];
+      if (!list.includes(task.label)) list.push(task.label);
+      binding.set(id, list);
     }
   }
   const usesStable = tpIds.some((id) => /^T-/.test(id));
   if (!usesStable) {
     for (const m of prContent.matchAll(/#(\d+)/g)) {
-      refIds.add(`#${parseInt(m[1])}`);
+      const id = `#${parseInt(m[1])}`;
+      refIds.add(id);
+      if (!binding.has(id)) binding.set(id, ['(legacy)']);
     }
+  }
+
+  const canonicalRows = parseCanonicalTestRows(tpContent);
+  const rowById = new Map();
+  for (const r of canonicalRows) {
+    if (!rowById.has(r.id)) rowById.set(r.id, r);
   }
 
   const issues = [];
@@ -321,10 +415,36 @@ function checkCrossRef(cwd, changeName) {
       detail: `plan-ready references tests ${[...untestableTasks].join(', ')} not found in test-plan`,
     });
   }
+  // Fail closed on structural inconsistencies found in the real consuming repo:
+  // one test id must belong to exactly one task, and every task's test selectors
+  // must live in test files the task declares in `Files`.
+  for (const [id, taskLabels] of binding) {
+    if (taskLabels.length > 1) {
+      issues.push({
+        type: 'duplicate_task_binding',
+        detail: `测试 ${id} 被多个 task 绑定: ${taskLabels.join(', ')}`,
+      });
+    }
+    const row = rowById.get(id);
+    if (!row) continue;
+    for (const label of taskLabels) {
+      if (label === '(legacy)') continue;
+      const task = tasks.find((t) => t.label === label);
+      if (task && !task.files.includes(row.file)) {
+        issues.push({
+          type: 'test_file_not_in_task_files',
+          detail: `${label} 的测试 ${id} 选择器文件 ${row.file} 不在该 task 的 Files 中`,
+        });
+      }
+    }
+  }
+  for (const d of findDuplicateSelectorIssues(canonicalRows)) issues.push(d);
+  const warnings = findTraceabilityWarnings(tpContent, canonicalRows);
 
   return {
     pass: issues.length === 0,
     issues,
+    warnings,
     summary: issues.length === 0
       ? `${tpIds.length} tests, all covered by plan-ready tasks.`
       : `${issues.length} cross-reference issue(s) found.`,
@@ -343,15 +463,19 @@ function checkBuildDone(cwd, changeName) {
   const prContent = safeRead(prPath);
 
   let allTasksDone = false;
+  let tasksDetail = 'Some tasks still [ ] in plan-ready.md';
   if (prContent) {
     const done = (prContent.match(/\[x\]/gi) ?? []).length;
     const pending = (prContent.match(/\[ \]/g) ?? []).length;
     allTasksDone = pending === 0 && done > 0;
+    if (done === 0 && pending === 0) {
+      tasksDetail = 'plan-ready.md 没有任何 [ ]/[x] task checkbox（每个 Task 需要一行，见 spec 模板）';
+    }
   }
 
   const issues = [];
   if (!tpResult.all_pass) issues.push({ type: 'tests_not_all_pass', detail: `${tpResult.stats?.fail ?? 0} FAIL, ${tpResult.stats?.todo ?? 0} TODO` });
-  if (!allTasksDone) issues.push({ type: 'tasks_not_all_done', detail: 'Some tasks still [ ] in plan-ready.md' });
+  if (!allTasksDone) issues.push({ type: 'tasks_not_all_done', detail: tasksDetail });
 
   return {
     pass: tpResult.all_pass && allTasksDone && !bMarker,

@@ -117,6 +117,7 @@ openspec validate <变更名> --strict
 - 追加新 task（绑定 test-plan.md 中的新测试**稳定 ID** `T-00x`）
 - 标记受影响但未修改的 task（如 "⚠️ 测试 T-002 预期行为变更，需调整此 task"）
 - **迁移旧引用**：test-plan/plan-ready 中旧的唯一 `#N` 引用在此次编辑时必须转为稳定 ID `T-00x`（`- Test cases: T-001, T-002`）；混合 / 重复 / 歧义引用会导致 build 时 `tdd-task-unmapped` fail-closed 报错
+- **改完必须重跑**：`gate.mjs check-cross-ref <变更名>`（同一 T-id 只能绑定一个 task；task 的 Test cases 选择器文件必须在 Files 中；重复 selector / 追溯表不一致会在此暴露），通过后才可继续
 
 ### 8. 同步详细实现计划
 

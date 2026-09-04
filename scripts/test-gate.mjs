@@ -792,6 +792,112 @@ console.log('\n[8b] canonical test-plan 稳定行（review F1/F2）');
   });
 }
 
+console.log('\n[8c] plan-ready 一致性硬校验（真实案例回归）');
+
+{
+  const TP = [
+    'T-001: `tests/auth/test_login.py::test_login_with_valid_credentials` ✅ PASS',
+    'T-002: `tests/auth/test_login.py::test_login_with_wrong_password` ✅ PASS',
+  ].join('\n');
+  const PR_HEAD = ['# plan-ready', ''];
+
+  run('同一 T-id 绑定多个 task -> check-cross-ref fail closed', () => {
+    const { dir } = makeGateFixture();
+    write(dir, 'openspec/changes/add-widget/test-plan.md', TP);
+    write(dir, 'openspec/changes/add-widget/plan-ready.md', [
+      ...PR_HEAD,
+      '### Task 1: login',
+      '- Test cases: T-001',
+      '- Files: `tests/auth/test_login.py`',
+      '',
+      '### Task 2: logout',
+      '- Test cases: T-001, T-002',
+      '- Files: `tests/auth/test_login.py`',
+    ].join('\n'));
+    const r = runGate(dir, 'check-cross-ref', 'add-widget');
+    assert.equal(r.pass, false, JSON.stringify(r));
+    assert.ok((r.issues || []).some((i) => i.type === 'duplicate_task_binding'), JSON.stringify(r.issues));
+  });
+
+  run('task 的 Test cases 选择器文件不在 Files -> fail closed', () => {
+    const { dir } = makeGateFixture();
+    write(dir, 'openspec/changes/add-widget/test-plan.md', TP);
+    write(dir, 'openspec/changes/add-widget/plan-ready.md', [
+      ...PR_HEAD,
+      '### Task 1: login',
+      '- Test cases: T-001, T-002',
+      '- Files: `src/auth/login.py`',
+    ].join('\n'));
+    const r = runGate(dir, 'check-cross-ref', 'add-widget');
+    assert.equal(r.pass, false, JSON.stringify(r));
+    const filesIssue = (r.issues || []).find((i) => i.type === 'test_file_not_in_task_files');
+    assert.ok(filesIssue, JSON.stringify(r.issues));
+    assert.match(filesIssue.detail, /tests\/auth\/test_login\.py/);
+  });
+
+  run('同一选择器被多个 T-id 拥有 -> duplicate_selector 提前拦截', () => {
+    const { dir } = makeGateFixture();
+    write(dir, 'openspec/changes/add-widget/test-plan.md', [
+      'T-001: `tests/auth/test_login.py::test_login_valid` ✅ PASS',
+      'T-002: `tests/auth/test_login.py::test_login_valid` ✅ PASS',
+    ].join('\n'));
+    write(dir, 'openspec/changes/add-widget/plan-ready.md', [
+      ...PR_HEAD,
+      '### Task 1: login',
+      '- Test cases: T-001, T-002',
+      '- Files: `tests/auth/test_login.py`',
+    ].join('\n'));
+    const r = runGate(dir, 'check-cross-ref', 'add-widget');
+    assert.equal(r.pass, false, JSON.stringify(r));
+    assert.ok((r.issues || []).some((i) => i.type === 'duplicate_selector'), JSON.stringify(r.issues));
+    const tp = runGate(dir, 'check-test-plan', 'add-widget');
+    assert.ok((tp.issues || []).some((i) => i.type === 'duplicate_selector'), JSON.stringify(tp.issues));
+  });
+
+  run('机器行与追溯表函数名不一致 -> warning 不阻断', () => {
+    const { dir } = makeGateFixture();
+    write(dir, 'openspec/changes/add-widget/test-plan.md', [
+      'T-001: `tests/auth/test_login.py::test_login_a` ✅ PASS',
+      'T-002: `tests/auth/test_login.py::test_login_b` ✅ PASS',
+      '',
+      '## 追溯表',
+      '',
+      '| ID | 来源 | 场景 | 测试文件::测试函数 | 类型 |',
+      '|----|------|------|--------------------|------|',
+      '| T-001 | REQ-1 | 登录 | `tests/auth/test_login.py::test_login_wrong_name` | 单元 |',
+      '| T-002 | REQ-2 | 登出 | `tests/auth/test_login.py::test_login_b` | 单元 |',
+    ].join('\n'));
+    write(dir, 'openspec/changes/add-widget/plan-ready.md', [
+      ...PR_HEAD,
+      '### Task 1: login',
+      '- Test cases: T-001, T-002',
+      '- Files: `tests/auth/test_login.py`',
+    ].join('\n'));
+    const r = runGate(dir, 'check-cross-ref', 'add-widget');
+    assert.equal(r.pass, true, JSON.stringify(r));
+    const warn = (r.warnings || []).find((w) => w.type === 'traceability_mismatch');
+    assert.ok(warn, JSON.stringify(r.warnings));
+    assert.match(warn.detail, /T-001/);
+  });
+
+  run('plan-ready 无任何 checkbox -> check-build-done 报准确错误', () => {
+    const { dir } = makeGateFixture();
+    write(dir, 'openspec/changes/add-widget/test-plan.md', TP);
+    write(dir, 'tests/auth/test_login.py', 'def test_login_with_valid_credentials():\n    assert True\n\ndef test_login_with_wrong_password():\n    assert True\n');
+    write(dir, 'openspec/changes/add-widget/plan-ready.md', [
+      ...PR_HEAD,
+      '### Task 1: login',
+      '- Test cases: T-001, T-002',
+      '- Files: `tests/auth/test_login.py`',
+    ].join('\n'));
+    const r = runGate(dir, 'check-build-done', 'add-widget');
+    assert.equal(r.pass, false, JSON.stringify(r));
+    const issue = (r.issues || []).find((i) => i.type === 'tasks_not_all_done');
+    assert.ok(issue, JSON.stringify(r.issues));
+    assert.match(issue.detail, /没有任何 \[ \]\/\[x\]/);
+  });
+}
+
 console.log('\n[9] write-verify-receipt 原子写入');
 
 {

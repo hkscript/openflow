@@ -207,7 +207,9 @@ function collectPlanReadyTasks(changeDir) {
 
   const done = (content.match(/\[x\]/gi) ?? []).length;
   const pending = (content.match(/\[ \]/g) ?? []).length;
-  return { done, pending, total: done + pending, allDone: pending === 0 && done > 0 };
+  const result = { done, pending, total: done + pending, allDone: pending === 0 && done > 0 };
+  if (result.total === 0) result.malformed = true; // 模板要求每 task 一行 [ ]/[x]
+  return result;
 }
 
 /**
@@ -519,6 +521,9 @@ function detectContradictions(signals, changeName) {
       desc = `git_commits: no related commits found`;
     } else if (key === 'plan_ready_tasks' && v.allDone) {
       desc = `plan_ready_tasks: ${v.done}/${v.total} done`;
+    } else if (key === 'plan_ready_tasks' && v.malformed) {
+      isNegative = true;
+      desc = 'plan_ready_tasks: plan-ready.md 缺少 [ ]/[x] task checkbox';
     } else if (key === 'plan_ready_tasks' && !v.allDone) {
       isNegative = true;
       desc = `plan_ready_tasks: ${v.done}/${v.total} done (${v.pending} pending)`;

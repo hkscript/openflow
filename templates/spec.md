@@ -237,12 +237,14 @@ T-003: `tests/auth/test_session.py::test_token_expiry_triggers_refresh` ❌ FAIL
 - 测试先行：<先写哪个测试（T-00x），在哪个文件 [Verified]>
 - 验证方式：<运行什么测试命令，预期结果>
 - 确定性：<[Verified] / [Inferred] / [Assumption] — 本 task 的整体确定性>
+- [ ] <任务名>
 ```
 
 **`Test cases` 与 `Files` 字段由 gate/enforce 逐行解析，必须存在：**
 - `- Test cases: T-001, T-002` — 引用 test-plan.md 中的稳定 ID（用逗号分隔）
 - `- Files: <文件路径>` — 该 task 允许修改的实现文件与测试文件（逗号分隔，路径可用 backtick）
 - 可选 `- Test framework setup: <根配置文件>` — 声明任务需要的有限测试框架配置（仅允许框架已知的根文件）
+- `- [ ] <任务名>` — 每 task 一行 checkbox，build 完成时改为 `- [x]`；detect/`check-build-done` 按 `[x]`/`[ ]` 统计进度
 
 **确定性标签规则：**
 - `[Verified]` = 所有改动文件和测试文件路径均已通过 grep/Read 确认存在
@@ -255,6 +257,7 @@ T-003: `tests/auth/test_session.py::test_token_expiry_triggers_refresh` ❌ FAIL
 2. 每个 task 必须在"测试先行"字段指明先写哪个测试（T-00x）
 3. 按执行依赖排序，不按功能模块排序
 4. 同一个测试文件里的测试尽量归到同一个 task
+5. 同一个测试 ID（T-00x）只能绑定一个 task；task 的 `Test cases` 选择器文件必须出现在该 task 的 `Files` 中（`check-cross-ref` fail-closed）
 
 ### 7. 代码逻辑深度核对与修正（循环直到无问题）
 
