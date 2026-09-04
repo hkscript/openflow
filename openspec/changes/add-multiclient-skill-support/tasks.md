@@ -27,3 +27,6 @@
 - [x] 3.4 Extend policy conformance tests to compare shared rules, Claude,
       OpenCode, and Codex outcomes where their event models are equivalent.
 - [x] 3.5 Run `pnpm test` and record the result.
+- [x] 3.6 Fix helper-path guidance so rendered docs stay valid when skills/hooks
+      dirs differ (Codex `.agents/skills` vs `.codex/hooks`); add render
+      regression tests and re-run `pnpm test`.

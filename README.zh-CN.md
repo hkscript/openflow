@@ -57,6 +57,12 @@ Codex 会为 `apply_patch` 注册 hook。安装或更新后，必须在 Codex �
 既有 `.codex/skills/` 目录不会被删除，但新的 Codex skills 将生成到
 `.agents/skills/`。
 
+Codex 使用 `--global` 全局安装时，生命周期 helpers 会写到 `~/.codex/hooks`
+并在 `~/.codex/hooks.json` 注册；项目安装则写到 `<项目根>/.codex/hooks`。
+因此全局安装下，项目里没有 `.codex/hooks/` 目录是正常现象——helper 路径按
+**你读取的 SKILL.md 的安装根**（项目根或 `~`）定位，不要用 shell 当前工作
+目录推断。
+
 ### 查看状态
 
 ```bash

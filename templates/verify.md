@@ -68,7 +68,7 @@ cargo test        # Rust
 - 依赖是否符合设计约束？
 - **「改动文件」/文件表对账**：design.md `## 改动文件` 节中列出的路径 vs `git diff <base>...HEAD --name-only`（整个变更分支的累计改动，**不只是未提交**——已提交的改动 `git diff` 默认看不到）与实际代码——表里有但没改、或改了但不在表 → 文档漂移，退回 `/openflow amend` 同步。跨仓库路径（顶层目录不在当前工作区）不参与对账，人工核对
 - **改动点归属对账（闸门 3 扩展，`check-design-consistency` 自动扫，含已提交的 base diff）**：
-  - **必须先跑**：`node <base>/.claude/hooks/openflow-gate.mjs check-design-consistency <变更名>`（无本地 gate 脚本时用已安装 openflow 的全局 helpers，或退回手动对账），把输出的 warnings **逐条对到改动点上**，确认是"改动落错方法"还是"误报"后才放行——**不跑 gate 直接判通过 = 闸门 3 未执行**
+  - **必须先跑**：`node <base>/.claude/hooks/openflow-gate.mjs check-design-consistency <变更名>`（gate helper 路径定位见主 SKILL.md「状态检测 → Helpers 定位」；无本地脚本时用全局 helpers `~/.claude/hooks/openflow-gate.mjs`，或退回手动对账），把输出的 warnings **逐条对到改动点上**，确认是"改动落错方法"还是"误报"后才放行——**不跑 gate 直接判通过 = 闸门 3 未执行**
   - "归属漂移" warning：design 声称的方法 vs diff 实际落点方法不一致（插错方法）——**改了没声称的方法，就是"改动落错了方法"的信号，必须追查它改了什么、design 声称的那个方法有没有**
   - "声称未落地" warning：design backtick 声称的改动目标方法，其文件有改动却无任何落点 → 未实现或已在上游提交
   - "完整性" warning：未覆盖的方法调用 design 点名的下游链路方法（命名不限同前缀）、或同前缀兄弟（带 `New`/`Old`/`V2` 后缀）共享下游调用但未覆盖
@@ -137,7 +137,7 @@ cargo test        # Rust
    - `designConsistency`：`blockers` 必须为空
    - `userConfirmation`：`received` 必须为 true——**用户显式确认改动点清单后**才填，AI 不能自填
 
-2. 运行已安装客户端的 `write-verify-receipt` 子命令（路径推导：把 SKILL.md 路径中的 `skills/openflow/SKILL.md` 替换为 `hooks/openflow-gate.mjs`，无本地 hook 时用已安装 openflow 的全局 helpers），**input 路径就是上面的 `verify-result.json`**：
+2. 运行已安装客户端的 `write-verify-receipt` 子命令（gate helper 路径定位见主 SKILL.md「状态检测 → Helpers 定位」；无本地 hook 时用全局 helpers `~/.claude/hooks/openflow-gate.mjs`），**input 路径就是上面的 `verify-result.json`**：
 
    ```bash
    node <base>/.claude/hooks/openflow-gate.mjs write-verify-receipt <变更名> openspec/changes/<变更名>/verify-result.json

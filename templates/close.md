@@ -106,7 +106,7 @@ grep -oP '### Task \d+: .+' openspec/changes/<变更名>/plan-ready.md \
 
 ```bash
 # 推荐：脚本校验（同时检查 proposal 格式 + openspec validate + building 标记）
-# 路径推导：SKILL.md 路径中将 skills/openflow/SKILL.md → hooks/openflow-gate.mjs
+# gate helper 路径定位：见主 SKILL.md「状态检测 → Helpers 定位」（与 SKILL.md 同一 <base>）
 node <base>/.claude/hooks/openflow-gate.mjs check-close-ready <变更名>
 
 # 或手动 grep
@@ -116,7 +116,7 @@ grep -q '^## What Changes' openspec/changes/<变更名>/proposal.md && echo "✅
 
 如果 `## Why` 或 `## What Changes` 缺失，**先修复 proposal.md 再归档**——根据变更内容补全缺失的节。这是阻塞性问题，不能在缺少必填节的情况下归档。
 
-执行归档命令（用 Bash 工具，路径推导：把 SKILL.md 路径中的 `skills/openflow/SKILL.md` 替换为 `hooks/openflow-gate.mjs`）：
+执行归档命令（用 Bash 工具；gate helper 路径定位见主 SKILL.md「状态检测 → Helpers 定位」）：
 
 ```bash
 node <base>/.claude/hooks/openflow-gate.mjs archive-verified <变更名>

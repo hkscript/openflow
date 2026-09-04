@@ -226,7 +226,7 @@ Step 8: 在 test-plan.md 对应稳定行**行尾**追加状态后缀 `✅ PASS`�
 2. **全量测试回归通过**：所有新老测试 PASS，无回归
 3. **所有 task checkbox 已勾选**：plan-ready.md 中无未勾选的 task
 
-**辅助脚本**：gate.mjs `check-build-done <变更名>` 可自动检测 task 完成状态、测试 PASS 情况和 building 标记。路径推导同上（`skills/openflow/SKILL.md` → `hooks/openflow-gate.mjs`）。
+**辅助脚本**：gate.mjs `check-build-done <变更名>` 可自动检测 task 完成状态、测试 PASS 情况和 building 标记。路径定位见主 SKILL.md「状态检测 → Helpers 定位」（与 SKILL.md 同一 `<base>`）。
 
 全部满足后，**切换阶段到 verify 并移除 building 标记**（先写 phase=verify 再删 marker，避免 detect 出现 task-build 无 marker 的矛盾窗口）：
 

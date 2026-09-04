@@ -57,6 +57,12 @@ review and trust the repository hook with Codex `/hooks`; OpenFlow never enables
 the hook-trust bypass. Existing legacy `.codex/skills/` directories are left
 untouched, but new Codex skills are generated under `.agents/skills/`.
 
+With a global Codex install (`--global`), the lifecycle helpers are written to
+`~/.codex/hooks` and registered in `~/.codex/hooks.json`; a project install uses
+`<project>/.codex/hooks` instead. So a project without a local `.codex/hooks`
+directory is normal in a global setup — locate helpers by the install root of
+the skill you read (project root or `~`), never by the shell working directory.
+
 ### Check status
 
 ```bash

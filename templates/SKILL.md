@@ -197,13 +197,23 @@ enforcement / gate / detect / receipt / archive 的**生命周期运行时**由 
 
 当用户调用 `/openflow` 不带子命令，或调用某个子命令需要确认前置条件时，**先运行状态检测脚本**：
 
-此 SKILL.md 路径为 `<base>/.claude/skills/openflow/SKILL.md`，将其中的 `skills/openflow/SKILL.md` 替换为 `hooks/openflow-detect.mjs` 即为脚本路径。
+### Helpers 定位（先验证，再运行）
+
+主 SKILL.md 与 helpers 安装在同一个**安装根 `<base>`** 下，但 skills 与 hooks 的目录名可以不同（如 Codex：skills 在 `.agents/skills`、hooks 在 `.codex/hooks`），**不要用"把 `skills/openflow/SKILL.md` 替换成 `hooks/…`"这类字符串替换推导路径**：
+
+- 本文件：`<base>/.claude/skills/openflow/SKILL.md`
+- helpers 目录：`<base>/.claude/hooks/`（`openflow-detect.mjs`、`openflow-gate.mjs` 等）
+
+`<base>` 由**你实际读取的本文件绝对路径**决定：全局安装为 `~`，项目安装为项目根目录——**不是 shell 当前目录**。运行前先用 `ls` 确认文件存在（铁律 1）：
 
 ```bash
+# 项目本地安装：<base> = 项目根
 node <base>/.claude/hooks/openflow-detect.mjs
+# 全局安装：<base> = ~
+ls ~/.claude/hooks/openflow-detect.mjs && node ~/.claude/hooks/openflow-detect.mjs
 ```
 
-脚本不存在时（旧版 openflow 未升级），回退到下方"手动状态检测"。
+以上位置都没有该脚本时（旧版 openflow 未升级或 helpers 未安装），回退到下方"手动状态检测"，**不要臆造路径继续运行**。
 
 脚本收集以下信号并输出 JSON：
 

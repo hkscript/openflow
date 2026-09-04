@@ -672,6 +672,24 @@ await run('渲染到 Cursor：无幻影 hooks 路径且保留 runtime 不可用�
   }
 });
 
+await run('渲染后 helpers 路径不依赖失效的 skills→hooks 字符串推导（Codex skills/hooks 目录名不同）', () => {
+  for (const tool of ['claude', 'codex', 'opencode', 'cursor']) {
+    const render = renderForTool(tool);
+    for (const rel of [...MAIN_TEMPLATES, ...SHORTCUT_TEMPLATES]) {
+      const rendered = render(readTemplate(rel));
+      assert.ok(!rendered.includes('.agents/hooks'), `${tool}/${rel} 渲染后出现幻影 .agents/hooks 路径`);
+      assert.ok(!rendered.includes('替换为 `hooks/'), `${tool}/${rel} 渲染后仍保留失效的字符串替换推导`);
+    }
+    const skill = render(readTemplate('SKILL.md'));
+    assert.ok(skill.includes('安装根 `<base>`'), `${tool} SKILL.md 缺少 helpers 安装根说明`);
+    assert.ok(skill.includes('不是 shell 当前目录'), `${tool} SKILL.md 缺少 base 防呆说明`);
+    for (const rel of GATE_TEMPLATES) {
+      const rendered = render(readTemplate(rel));
+      assert.ok(!rendered.includes('skills/openflow/SKILL.md` 替换为'), `${tool}/${rel} 仍用 SKILL.md 路径推导 gate helper`);
+    }
+  }
+});
+
 await run('spec.md 生成 T-001 稳定 ID + 状态后缀语法，plan-ready 绑定稳定 ID', () => {
   const c = readTemplate('spec.md');
   assert.match(c, /T-\d{3}/, '缺少 T-001 稳定 ID 示例');
