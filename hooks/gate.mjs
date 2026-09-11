@@ -17,6 +17,7 @@
  *   check-verify-issues   — verify-issues.md 未解决项检查
  *   check-design-consistency — design.md「改动文件」节 vs plan-ready + git（basename 兜底、跨仓库跳过）；
  *                            扩展：改动点归属对账（claim-vs-actual + 声称未落地反查）与并行入口完整性（共享下游链路，warning 级）；
+ *                            归属解析支持跨行签名（括号/花括号配对），并豁免本次新增方法/直接下游/"无代码改动"目标；
  *                            diff 含基准分支累计改动（git diff <base>...HEAD），不只看未提交
  *   check-amend-count     — amendment tracking
  *   check-writing-plans   — writing-plans availability
@@ -708,6 +709,11 @@ function checkDesignConsistency(cwd, changeName, opts = {}) {
 // ① 归属漂移——diff hunk 实际所在方法是否在 design 声称集合内（已提交的 base diff 也查，不只未提交）；
 // ② 声称未落地——design backtick 声称的改动目标方法，若其文件有改动却无 hunk 落进它 → 未实现或已提交，反方向兜底；
 // ③ 完整性——命名不限：任何未覆盖的方法调用 design 点名的下游链路方法就报；同前缀兄弟方法（New/Old/V2）共享下游调用兜底。
+// 精度规则（2026-09 修复：多行签名漏识别导致的成片误报）：
+//   · 方法声明按括号/花括号配对解析，支持 Java/TS 等换行签名；调用点续行（`&& f(...)) {`）不算声明；
+//   · hunk 区域扫描覆盖 newStart..newStart+min(newCount,12)，且只认"注释/注解/字段声明之后紧跟"的声明；
+//   · 本次 diff 新增的方法、design 点名方法的同文件直接下游不算"归属漂移"（新增/下沉属正常分工）；
+//   · 声称未落地按行区间重叠判定落点（大 hunk 覆盖多方法），并豁免"无代码改动"与纯既有代码引用（[Verified]/复用/同构）。
 // 注意：③ 依赖 design 点名下游链路；② 只覆盖 backtick 命名的目标、①/③ 的同前缀部分只覆盖"同前缀 + 已知后缀"命名。
 // 启发式找不到声明就静默跳过，跨仓库/测试文件不参与。
 
@@ -716,7 +722,6 @@ const METHOD_DECL_RES = {
   go: /^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_$][\w$]*)\s*\([^;{}]*\)\s*(?:[\w<>[\], ?.&|]+)?\s*\{/,
   rb: /^\s*(?:def|class|module)\s+([A-Za-z_$][\w$]*)/,
   rs: /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?(?:fn|unsafe\s+fn)\s+([A-Za-z_$][\w$]*)\s*\(/,
-  brace: /^\s*(?:[\w<>[\], ?.&|]+\s+)?([A-Za-z_$][\w$]*)\s*\([^;{}]*\)\s*(?::\s*[\w<>[\], ?.&|]+)?\s*\{/,
 };
 
 const BRACE_LANGS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.java', '.kt', '.cs', '.swift', '.c', '.cc', '.cpp', '.h', '.hpp', '.scala', '.sc']);
@@ -727,13 +732,161 @@ function declRegexFor(filePath) {
   if (ext === '.go') return METHOD_DECL_RES.go;
   if (ext === '.rb' || ext === '.rake') return METHOD_DECL_RES.rb;
   if (ext === '.rs') return METHOD_DECL_RES.rs;
-  if (BRACE_LANGS.has(ext)) return METHOD_DECL_RES.brace;
   return null;
 }
 
-// new Runnable() { 这类匿名类/类型声明不是方法，扫描时跳过
-function isNoiseDecl(line) {
-  return /^\s*(?:new|class|interface|enum|record|struct|impl|module)\b/.test(line);
+function isBraceLang(filePath) {
+  return BRACE_LANGS.has(path.extname(filePath).toLowerCase());
+}
+
+function supportsMethodScan(filePath) {
+  return isBraceLang(filePath) || declRegexFor(filePath) !== null;
+}
+
+// ---- 花括号语言（Java/TS/JS/C#/Kotlin/...）方法声明扫描 ----
+// 旧实现用单行正则匹配声明，换行的签名（Java 参数换行、TS 多行参数）整体漏识别，
+// 于是 hunk 被回溯归属到上一个方法；调用点续行（`&& foo(...)) {`）又会因返回类型字符类
+// 含空格/&被误当成声明。这里改为：去注释/字符串 → 括号配对 → 花括号配对，得到精确方法体范围。
+
+// 把注释/字符串内容替换为空格（保留换行与字符偏移），避免注释里的 `task_id（` 被当成调用。
+// 注意：反引号不做模板字符串处理——JS 正则字面量里出现 ` 的概率远高于模板字符串里出现 //，
+// 误判会吞掉后续大段代码；末尾用"空白化比例"兜底，异常时退回原文。
+function stripSourceComments(src) {
+  let out = '';
+  let i = 0;
+  const n = src.length;
+  let state = 'code'; // code | line | block | str | chr
+  const blank = (c) => (c === '\n' ? '\n' : ' ');
+  while (i < n) {
+    const c = src[i], d = src[i + 1];
+    if (state === 'code') {
+      if (c === '/' && d === '/') { state = 'line'; out += '  '; i += 2; continue; }
+      if (c === '/' && d === '*') { state = 'block'; out += '  '; i += 2; continue; }
+      if (c === '"' && d === '"' && src[i + 2] === '"') { state = 'textblock'; out += '   '; i += 3; continue; }
+      if (c === '"') { state = 'str'; out += ' '; i += 1; continue; }
+      if (c === "'") { state = 'chr'; out += ' '; i += 1; continue; }
+      out += c; i += 1; continue;
+    }
+    if (state === 'line') { if (c === '\n') { state = 'code'; out += '\n'; } else out += ' '; i += 1; continue; }
+    if (state === 'block') { if (c === '*' && d === '/') { state = 'code'; out += '  '; i += 2; continue; } out += blank(c); i += 1; continue; }
+    if (state === 'textblock') { if (c === '"' && d === '"' && src[i + 2] === '"') { state = 'code'; out += '   '; i += 3; continue; } out += blank(c); i += 1; continue; }
+    if (state === 'str') { if (c === '\\') { out += '  '; i += 2; continue; } if (c === '"') state = 'code'; out += blank(c); i += 1; continue; }
+    if (state === 'chr') { if (c === '\\') { out += '  '; i += 2; continue; } if (c === "'") state = 'code'; out += blank(c); i += 1; continue; }
+  }
+  const nonWs = (s) => s.replace(/\s/g, '').length;
+  if (nonWs(out) < nonWs(src) * 0.5) return src; // 状态机被正则/模板误判 → 退回原文（宁少剥，不吞代码）
+  return out;
+}
+
+function lineIndexMap(code) {
+  const map = new Array(code.length);
+  let ln = 1;
+  for (let i = 0; i < code.length; i++) { map[i] = ln; if (code[i] === '\n') ln++; }
+  return map;
+}
+
+function matchParen(code, openIdx) {
+  let depth = 0;
+  for (let i = openIdx; i < code.length; i++) {
+    if (code[i] === '(') depth++;
+    else if (code[i] === ')') { depth--; if (depth === 0) return i; }
+  }
+  return -1;
+}
+
+function matchBrace(code, openIdx) {
+  let depth = 0;
+  for (let i = openIdx; i < code.length; i++) {
+    if (code[i] === '{') depth++;
+    else if (code[i] === '}') { depth--; if (depth === 0) return i; }
+  }
+  return -1;
+}
+
+// `)` 之后跳过 throws/返回类型/数组后缀，找到方法体 `{`；先遇到 `;` 说明是抽象/接口签名
+function findBodyOpen(code, closeParenIdx) {
+  let i = closeParenIdx + 1;
+  let depth = 0;
+  while (i < code.length) {
+    const c = code[i];
+    if (c === '(' || c === '[') depth++;
+    else if (c === ')' || c === ']') { if (depth === 0) return -1; depth--; }
+    else if (c === '{' && depth === 0) return i;
+    else if (c === ';' && depth === 0) return -1;
+    i++;
+  }
+  return -1;
+}
+
+// 行首是这些字符 → 表达式/续行，不可能是声明
+const BRACE_DECL_START_RE = /^(?:&&|\|\||\?|\)|\.|;|\}|\{|,|\]|=|\+|-|\*|\/|%|!|:)/;
+// 同一行的声明头关键字（类/匿名类/包导入不是方法）
+const BRACE_NON_METHOD_HEAD_RE = /^(?:new|class|interface|enum|record|struct|impl|module|trait|object|package|import|namespace)$/;
+
+// 无返回类型（JS/TS 类方法）时，只接受"新鲜语句起点"：往前只有空白，或仅夹着注解行
+function isFreshStatementStart(code, nameIdx) {
+  let i = nameIdx - 1;
+  while (i >= 0 && /\s/.test(code[i])) i--;
+  if (i < 0) return true;
+  if (/[;{}]/.test(code[i])) return true;
+  const stmtStart = Math.max(code.lastIndexOf(';', i), code.lastIndexOf('{', i), code.lastIndexOf('}', i));
+  const gap = code.slice(stmtStart + 1, i + 1).split('\n').map((s) => s.trim()).filter(Boolean);
+  return gap.length > 0 && gap.every((s) => s.startsWith('@'));
+}
+
+function scanBraceDecls(code) {
+  const lineOf = lineIndexMap(code);
+  const decls = [];
+  const re = /([A-Za-z_$][\w$]*)\s*\(/g;
+  let m;
+  while ((m = re.exec(code))) {
+    const name = m[1];
+    if (isControlKeyword(name)) continue;
+    const beforeName = m.index > 0 ? code[m.index - 1] : '\n';
+    if (!/\s/.test(beforeName)) continue; // 排除 a.b( / T::f( / @Anno( / ->f(
+    const lineStart = code.lastIndexOf('\n', m.index) + 1;
+    const prefix = code.slice(lineStart, m.index);
+    const trimmed = prefix.trim();
+    if (trimmed) {
+      if (BRACE_DECL_START_RE.test(trimmed)) continue;
+      if (/[=?:]|->/.test(prefix)) continue;
+      if (/\b(?:return|throw|new)\b/.test(prefix)) continue;
+      // prefix 不含方法名；head 就是名字之前的全部词（修饰符/返回类型/function 等）
+      const head = trimmed.split(/\s+/).filter(Boolean);
+      if (!head.length) continue;
+      if (BRACE_NON_METHOD_HEAD_RE.test(head[0])) continue;
+    } else if (!isFreshStatementStart(code, m.index)) {
+      continue;
+    }
+    const parenIdx = m.index + m[0].length - 1;
+    const closeParen = matchParen(code, parenIdx);
+    if (closeParen < 0) continue;
+    const bodyOpen = findBodyOpen(code, closeParen);
+    if (bodyOpen < 0) continue;
+    const bodyClose = matchBrace(code, bodyOpen);
+    if (bodyClose < 0) continue;
+    decls.push({ name, line: lineOf[m.index], bodyStart: lineOf[bodyOpen], bodyEnd: lineOf[bodyClose] });
+  }
+  return decls;
+}
+
+// 单行正则语言（py/go/rb/rs）的声明列表（无精确方法体范围）
+function scanLineDecls(content, declRe) {
+  const lines = content.split('\n');
+  const decls = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*(?:new|class|interface|enum|record|struct|impl|module)\b/.test(lines[i])) continue;
+    const m = lines[i].match(declRe);
+    if (m && !isControlKeyword(m[1])) decls.push({ name: m[1], line: i + 1 });
+  }
+  return decls;
+}
+
+function parseMethodDecls(content, filePath) {
+  const declRe = declRegexFor(filePath);
+  if (declRe) return scanLineDecls(content, declRe);
+  if (isBraceLang(filePath)) return scanBraceDecls(stripSourceComments(content));
+  return [];
 }
 
 // 控制流关键字不是方法：`if (...) {` 会被 brace 正则捕获成方法名，必须排除
@@ -793,45 +946,58 @@ function diffHunks(cwd, config) {
 function containingMethods(absPath, relFile, hunk) {
   const content = fileContentAt(absPath, relFile, hunk.ref);
   if (!content) return [];
-  const declRe = declRegexFor(relFile);
-  if (!declRe) return [];
+  if (!supportsMethodScan(relFile)) return [];
   const lines = content.split('\n');
-  const regionEnd = Math.min(lines.length, hunk.newStart - 1 + Math.max(1, hunk.newCount));
-  // 仅当 hunk 开头就是（或紧邻）方法声明时用区域扫描——真·新增/改签名方法；大段体内改动不扫区域，避免误归属到下一个方法
-  const region = [];
-  const scanLimit = Math.min(regionEnd, hunk.newStart + 1);
-  for (let i = hunk.newStart - 1; i < scanLimit; i++) {
-    if (isNoiseDecl(lines[i])) continue;
-    const m = lines[i].match(declRe);
-    if (m && !isControlKeyword(m[1])) region.push({ name: m[1], line: i + 1 });
-  }
+  const decls = methodDeclsFor(content, relFile, hunk.ref);
+  // 区域扫描：hunk 起点到 newStart+min(newCount,12)——新增方法常带 Javadoc/注解，
+  // 起点落在注释上；只认"注释/空白/注解之后紧跟的声明"，避免大段体内改动误归属到下一个方法
+  const span = Math.max(1, Math.min(Number.isFinite(hunk.newCount) ? hunk.newCount : 0, 12));
+  const regionScanEnd = hunk.newStart + span - 1;
+  const region = decls.filter((d) => d.line >= hunk.newStart && d.line <= regionScanEnd
+    && isDeclPreambleOnly(lines, hunk.newStart, d.line));
   if (region.length) return region;
-  const floor = Math.max(0, hunk.newStart - 2 - 400);
-  for (let i = hunk.newStart - 2; i >= floor; i--) {
-    if (isNoiseDecl(lines[i])) continue;
-    const m = lines[i].match(declRe);
-    if (m && !isControlKeyword(m[1])) {
-      // getter/setter 被远距离归属 → 低置信（getter 体不可能跨几十行），宁漏勿误
-      if (/^(get|set|is|has)[A-Z]/.test(m[1]) && (hunk.newStart - 1 - i) > 20) continue;
-      return [{ name: m[1], line: i + 1 }];
-    }
+  const floorLine = hunk.newStart - 2 - 400;
+  const preceding = decls.filter((d) => d.line <= hunk.newStart - 1 && d.line >= floorLine);
+  for (let k = preceding.length - 1; k >= 0; k--) {
+    const d = preceding[k];
+    // getter/setter 被远距离归属 → 低置信（getter 体不可能跨几十行），宁漏勿误
+    if (/^(get|set|is|has)[A-Z]/.test(d.name) && (hunk.newStart - 1 - d.line) > 20) continue;
+    return [{ name: d.name, line: d.line }];
   }
   return [];
 }
 
+// [fromLine, declLine) 只能出现空白/注释/注解/字段声明——说明这个声明是 hunk 自己新增的
+function isDeclPreambleOnly(lines, fromLine, declLine) {
+  for (let i = fromLine; i < declLine; i++) {
+    const t = (lines[i - 1] || '').trim();
+    if (!t) continue;
+    if (t.startsWith('*') || t.startsWith('/*') || t.startsWith('//') || t.startsWith('@')) continue;
+    // 字段/常量声明夹在 Javadoc 与新方法之间（`private Map<...> x = new HashMap<>();`）
+    if (/^(?:public|protected|private|static|final|const|readonly|volatile|transient)\b/.test(t) && t.endsWith(';')) continue;
+    return false;
+  }
+  return true;
+}
+
+// 同一份内容在一次 gate 运行里只解析一次（hunk 数量多时会重复调用）
+const METHOD_DECL_CACHE = new Map();
+
 // 全文件方法声明列表（完整性检查用）
 function declaredMethods(filePath) {
+  const key = `wt:${filePath}`;
+  if (METHOD_DECL_CACHE.has(key)) return METHOD_DECL_CACHE.get(key);
   const content = safeRead(filePath);
-  if (!content) return [];
-  const declRe = declRegexFor(filePath);
-  if (!declRe) return [];
-  const lines = content.split('\n');
-  const decls = [];
-  for (let i = 0; i < lines.length; i++) {
-    if (isNoiseDecl(lines[i])) continue;
-    const m = lines[i].match(declRe);
-    if (m && !isControlKeyword(m[1])) decls.push({ name: m[1], line: i + 1 });
-  }
+  const decls = content ? parseMethodDecls(content, filePath) : [];
+  if (content) METHOD_DECL_CACHE.set(key, decls);
+  return decls;
+}
+
+function methodDeclsFor(content, filePath, ref) {
+  const key = `${ref || 'worktree'}:${filePath}`;
+  if (METHOD_DECL_CACHE.has(key)) return METHOD_DECL_CACHE.get(key);
+  const decls = parseMethodDecls(content, filePath);
+  METHOD_DECL_CACHE.set(key, decls);
   return decls;
 }
 
@@ -848,11 +1014,17 @@ function methodCallees(lines, startIdx, endIdx) {
   return callees;
 }
 
-// 方法 d 的体范围 [startIdx, endIdx]（到下一个声明的上一行或文件尾）
+// 方法 d 的体范围 [startIdx, endIdx]：优先用花括号配对得到的精确体结束行，
+// 否则（py/go/rb/rs）退回"下一个声明的上一行或文件尾"
 function methodBodyRange(lines, decls, d) {
   const order = [...decls].sort((x, y) => x.line - y.line);
   const idx = order.findIndex((x) => x.name === d.name && x.line === d.line);
   if (idx < 0) return [d.line - 1, lines.length - 1];
+  // 有花括号配对信息时用真正的体范围（不含签名行——否则 `foo(` 会把方法名算成自己的下游调用）
+  if (order[idx].bodyEnd) {
+    const start = order[idx].bodyStart || d.line;
+    return [start - 1, Math.max(start - 1, order[idx].bodyEnd - 1)];
+  }
   const end = idx + 1 < order.length ? order[idx + 1].line - 2 : lines.length - 1;
   return [d.line - 1, Math.max(d.line - 1, end)];
 }
@@ -868,12 +1040,12 @@ function sharedCallees(lines, decls, a, b) {
   return shared;
 }
 
-// 从 design.md 提取声称的方法名：backtick 标识符 + 裸标识符（/（ 跟随
+// 从 design.md 提取声称的方法名：backtick 标识符 + 裸标识符（/（ 跟随。
+// 归属/完整性方向用全文（含 ## 改动点 N / ## 补充确认）——宁漏勿误，避免"声称正确却报漂移"。
 function claimedMethodNames(designContent) {
-  const section = extractSection(designContent, '现状与影响面') || designContent;
   const claimed = new Set();
-  for (const m of section.matchAll(/`([\w$.]+)`/g)) claimed.add(m[1]);
-  for (const m of section.matchAll(/([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*[（(]/g)) claimed.add(m[1]);
+  for (const m of designContent.matchAll(/`([\w$.]+)`/g)) claimed.add(m[1]);
+  for (const m of designContent.matchAll(/([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*[（(]/g)) claimed.add(m[1]);
   return claimed;
 }
 
@@ -933,17 +1105,70 @@ function checkChangePointOwnership(cwd, changeName, designContent, config) {
     hunksByFile.get(h.file).push(h);
   }
 
+  // 本 diff 新增/改写的行区间：落在其中的方法声明 = 本次新增的方法，不可能"插错方法"
+  const addedRangesByFile = new Map();
+  function isAddedLine(file, line) {
+    if (!addedRangesByFile.has(file)) {
+      addedRangesByFile.set(file, (hunksByFile.get(file) || [])
+        .map((h) => [h.newStart, h.newStart + Math.max(0, h.newCount) - 1]));
+    }
+    return addedRangesByFile.get(file).some(([s, e]) => e >= s && line >= s && line <= e);
+  }
+
+  // design 点名方法在**同文件**的直接下游调用：实现落在入口的私有下游属正常分工，不算漂移
+  const claimedDownstreamByFile = new Map();
+  function claimedDownstream(file) {
+    if (claimedDownstreamByFile.has(file)) return claimedDownstreamByFile.get(file);
+    const absPath = path.join(cwd, file);
+    const content = safeRead(absPath);
+    const set = new Set();
+    if (content) {
+      const codeLines = stripSourceComments(content).split('\n');
+      const decls = declaredMethods(absPath);
+      for (const m of decls) {
+        if (!claimedMatches(claimed, m.name)) continue;
+        const [s, e] = methodBodyRange(codeLines, decls, m);
+        for (const c of methodCallees(codeLines, s, e)) set.add(c);
+      }
+    }
+    claimedDownstreamByFile.set(file, set);
+    return set;
+  }
+
   // 归属漂移：diff hunk 实际所在方法是否在 design 声称集合内
   for (const h of hunks) {
     for (const cm of containingMethods(path.join(cwd, h.file), h.file, h)) {
-      if (!claimedMatches(claimed, cm.name)) {
-        warnings.push(`改动点归属：design 声称改动未包含方法 ${cm.name}（${h.file}:${cm.line}），但 diff 落点在此方法内（第 ${h.newStart} 行）——方法归属漂移，人工核对是否插错方法`);
-      }
+      if (claimedMatches(claimed, cm.name)) continue;
+      if (isAddedLine(h.file, cm.line)) continue;
+      if (claimedDownstream(h.file).has(cm.name)) continue;
+      warnings.push(`改动点归属：design 声称改动未包含方法 ${cm.name}（${h.file}:${cm.line}），但 diff 落点在此方法内（第 ${h.newStart} 行）——方法归属漂移，人工核对是否插错方法`);
     }
   }
 
+  // design 显式标注"无代码改动 / 不随改 / 保持基线"的目标：声称未落地反查跳过（显式豁免）
+  const exemptTargets = new Set();
+  for (const line of designContent.split('\n')) {
+    if (!/无代码改动|不随改|无需改动|不改动|保持(?:master|基线|原)/.test(line)) continue;
+    for (const m of line.matchAll(/`([\w$.]+)`/g)) exemptTargets.add(m[1].split('.').pop());
+  }
+  // 只在"既有代码引用"语境出现的标识符不算"声称要改"：同一标识符的每处 backtick 都带
+  // [Verified]/复用/同构/沿用/既有 等标记时跳过反查（宁漏勿误——引用锚点不是改动目标）
+  const mentionSeen = new Set();
+  const mentionAsTarget = new Set();
+  for (const line of designContent.split('\n')) {
+    const referenceOnly = /\[Verified|复用|同构|沿用|既有|现有|实际签名/.test(line);
+    for (const m of line.matchAll(/`([\w$.]+)`/g)) {
+      const name = m[1].split('.').pop();
+      mentionSeen.add(name);
+      if (!referenceOnly) mentionAsTarget.add(name);
+    }
+  }
+  for (const n of mentionSeen) if (!mentionAsTarget.has(n)) exemptTargets.add(n);
+
   // 声称未落地：design backtick 声称的改动目标方法，若其文件有改动却无 hunk 落进它 → 未实现或已在上游提交（反方向兜底）
   const claimedTargets = claimedTargetNames(designContent);
+  const landedNamesGlobal = new Set();
+  const claimedTargetFiles = [];
   for (const [file, fileHunks] of hunksByFile) {
     const absPath = path.join(cwd, file);
     const decls = declaredMethods(absPath);
@@ -951,9 +1176,26 @@ function checkChangePointOwnership(cwd, changeName, designContent, config) {
     for (const h of fileHunks) {
       for (const cm of containingMethods(absPath, file, h)) landed.add(cm.name);
     }
+    // 大 hunk（例如一次新增几百行）会覆盖多个方法：按行区间重叠判定"落点覆盖"，
+    // 否则只有 hunk 起点的那个方法算落地，其余被误报"声称未落地"
+    const landedByRange = new Set();
+    for (const d of decls) {
+      const end = d.bodyEnd || d.line;
+      if (fileHunks.some((h) => h.newStart <= end && h.newStart + Math.max(1, h.newCount) - 1 >= d.line)) {
+        landedByRange.add(d.name);
+      }
+    }
+    claimedTargetFiles.push({ file, decls, landed, landedByRange });
+    for (const n of landed) landedNamesGlobal.add(n);
+    for (const n of landedByRange) landedNamesGlobal.add(n);
+  }
+  for (const { file, decls, landed, landedByRange } of claimedTargetFiles) {
     for (const d of decls) {
       if (!claimedTargets.has(d.name)) continue;
-      if (landed.has(d.name)) continue;
+      if (exemptTargets.has(d.name)) continue;
+      if (landed.has(d.name) || landedByRange.has(d.name)) continue;
+      // 同名方法已在别的改动文件落地 → design 的目标已兑现；跨文件同名不再逐处反查（宁漏勿误）
+      if (landedNamesGlobal.has(d.name)) continue;
       warnings.push(`声称未落地：design 声称改 ${d.name}（${file}:${d.line}），但该文件有改动却没有任何落点在它里面——改动点未实现或已在上游提交，人工核对`);
     }
   }
@@ -964,19 +1206,22 @@ function checkChangePointOwnership(cwd, changeName, designContent, config) {
   for (const [file, fileHunks] of hunksByFile) {
     const absPath = path.join(cwd, file);
     const decls = declaredMethods(absPath);
-    const lines = safeRead(absPath)?.split('\n') || [];
+    const rawContent = safeRead(absPath);
+    const lines = rawContent ? stripSourceComments(rawContent).split('\n') : [];
+    const declNames = new Set(decls.map((d) => d.name));
     // 有效锚点：design 声称的目标方法实际调用的下游方法（同文件）——这才是改动链路
     const chainCallees = new Set();
     for (const m of decls) {
       if (!claimedMatches(claimed, m.name)) continue;
       const [ms, me] = methodBodyRange(lines, decls, m);
       for (const c of methodCallees(lines, ms, me)) {
-        if (!isGenericCallee(c)) chainCallees.add(c);
+        // 锚点必须是本文件真实声明的方法：Math.max/stopActivity 这类库/外部调用不构成"改动链路"
+        if (declNames.has(c) && !isGenericCallee(c)) chainCallees.add(c);
       }
     }
     for (const d of decls) {
       if (claimedMatches(claimed, d.name)) continue; // design 已覆盖
-      const [ds, de] = methodBodyRange(lines, decls, d);
+    const [ds, de] = methodBodyRange(lines, decls, d);
       const dCallees = methodCallees(lines, ds, de);
       const chainCallee = [...dCallees].find((c) =>
         claimedMatches(claimed, c) && chainCallees.has(c));

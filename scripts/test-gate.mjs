@@ -1092,5 +1092,341 @@ console.log('\n[11] archive-verified 归档事务');
   });
 }
 
+console.log('\n[12] 改动点归属对账（Java 多行签名 / 窗口 / 豁免 回归）');
+
+{
+  // 归属对账需要「已提交的 base + 未提交的改动」才能稳定产出 hunk；
+  // HEAD 提交基线后写 head 版本（不提交），diffHunks 走 worktree ref。
+  function ownershipFixture({ base, head, design }) {
+    const dir = tmpdir();
+    gitInit(dir);
+    for (const [rel, content] of Object.entries(base)) write(dir, rel, content);
+    git(dir, ['add', '.']);
+    git(dir, ['commit', '-qm', 'base']);
+    for (const [rel, content] of Object.entries(head)) write(dir, rel, content);
+    write(dir, 'openspec/changes/add-widget/design.md', design);
+    return dir;
+  }
+
+  const JAVA = 'src/main/java/com/x/Multi.java';
+  const designFor = (body, files) => [
+    '## 现状与影响面', '', body, '',
+    '## 改动文件', '', ...files.map((f) => `- ${f}`),
+  ].join('\n');
+  const joined = (lines) => lines.join('\n') + '\n';
+
+  run('多行 Java 签名：hunk 归属到真实方法而非上一个方法', () => {
+    const lines = (marker) => [
+      'package com.x;', '',
+      'public class Multi {',
+      '    private void before() {',
+      '        int a = 1;',
+      '    }', '',
+      '    public void processStrategyRule(String ruleType, String rule,',
+      '            String task) {',
+      '        int b = 2;',
+      marker,
+      '    }',
+      '}', '',
+    ];
+    const dir = ownershipFixture({
+      base: { [JAVA]: joined(lines('')) },
+      head: { [JAVA]: joined(lines('        int c = 3;')) },
+      design: designFor('`processStrategyRule` 增加一行。', [JAVA]),
+    });
+    const r = runGate(dir, 'check-design-consistency', 'add-widget');
+    const w = (r.warnings || []).join('\n');
+    assert.ok(!/改动点归属/.test(w), `多行签名不应误报归属漂移: ${w}`);
+  });
+
+  run('新增方法带 Javadoc：hunk 起点落在注释上仍归属到新方法', () => {
+    const base = joined([
+      'package com.x;', '',
+      'public class Added {',
+      '    private void existing() {',
+      '        int a = 1;',
+      '    }',
+      '}', '',
+    ]);
+    const head = joined([
+      'package com.x;', '',
+      'public class Added {',
+      '    private void existing() {',
+      '        int a = 1;',
+      '    }', '',
+      '    /**',
+      '     * 驳回/超时后作废暂停活动。',
+      '     */',
+      '    private void handleApproveNotPassVoidPausedActivity(String status, String remark) {',
+      '        int b = 2;',
+      '    }',
+      '}', '',
+    ]);
+    const dir = ownershipFixture({
+      base: { [JAVA]: base },
+      head: { [JAVA]: head },
+      design: designFor('`handleApproveNotPassVoidPausedActivity` 为新增方法。', [JAVA]),
+    });
+    const r = runGate(dir, 'check-design-consistency', 'add-widget');
+    const w = (r.warnings || []).join('\n');
+    assert.ok(!/改动点归属/.test(w), `Javadoc 窗口不应误报归属漂移: ${w}`);
+  });
+
+  run('调用点不是方法声明：多行条件续行 && foo(... ) 不得当声明', () => {
+    const lines = (marker) => [
+      'package com.x;', '',
+      'public class CallSite {',
+      '    private boolean filterCompanyUnfitRuleParam(String ruleType,',
+      '            String source, String entity) {',
+      '        if (entity != null',
+      '                && isCompanyPbPstApprove(entity, source)) {',
+      marker,
+      '        }',
+      '        return false;',
+      '    }', '',
+      '    private boolean isCompanyPbPstApprove(String a, String b) {',
+      '        return a != null;',
+      '    }',
+      '}', '',
+    ];
+    const dir = ownershipFixture({
+      base: { [JAVA]: joined(lines('')) },
+      head: { [JAVA]: joined(lines('            return true;')) },
+      design: designFor('`filterCompanyUnfitRuleParam` 增加分支。', [JAVA]),
+    });
+    const r = runGate(dir, 'check-design-consistency', 'add-widget');
+    const w = (r.warnings || []).join('\n');
+    assert.ok(!/改动点归属/.test(w), `调用点续行不应被当成声明: ${w}`);
+    assert.ok(!/isCompanyPbPstApprove/.test(w), `不应把调用点方法名当作落点: ${w}`);
+  });
+
+  run('本次新增的方法即使 design 未点名也不报归属漂移', () => {
+    const baseSrc = 'package com.x;\n\npublic class Helper {\n    private void mainFlow() {\n        int a = 1;\n    }\n}\n';
+    const headSrc = joined([
+      'package com.x;', '',
+      'public class Helper {',
+      '    private void mainFlow() {',
+      '        int a = 1;',
+      '    }', '',
+      '    private boolean useSelfParam(String entity) {',
+      '        return entity != null;',
+      '    }',
+      '}', '',
+    ]);
+    const dir = ownershipFixture({
+      base: { [JAVA]: baseSrc },
+      head: { [JAVA]: headSrc },
+      design: designFor('只改 `mainFlow`；实现新增的私有辅助方法不作声称。', [JAVA]),
+    });
+    const r = runGate(dir, 'check-design-consistency', 'add-widget');
+    const w = (r.warnings || []).join('\n');
+    assert.ok(!/改动点归属/.test(w), `新增方法不应报归属漂移: ${w}`);
+  });
+
+  run('design 标注「无代码改动」的目标不报声称未落地', () => {
+    const baseSrc = joined([
+      'package com.x;', '',
+      'public class Exempt {',
+      '    public void rejectHandleFollowStatus(long id) {',
+      '        int a = 1;',
+      '    }', '',
+      '    public void other(long id) {',
+      '        int b = 1;',
+      '    }',
+      '}', '',
+    ]);
+    const headSrc = baseSrc.replace('        int b = 1;', '        int b = 2;');
+    const dir = ownershipFixture({
+      base: { [JAVA]: baseSrc },
+      head: { [JAVA]: headSrc },
+      design: designFor([
+        '| 链路 | 方法 | 说明 |',
+        '|---|---|---|',
+        '| 市调驳回 | `rejectHandleFollowStatus` | 无代码改动（status=1 命中） |',
+        '| 其他 | `other` | 加一行 |',
+      ].join('\n'), [JAVA]),
+    });
+    const r = runGate(dir, 'check-design-consistency', 'add-widget');
+    const w = (r.warnings || []).join('\n');
+    assert.ok(!/声称未落地/.test(w), `显式豁免不应报声称未落地: ${w}`);
+  });
+
+  run('注释里的标识符不算下游调用（完整性不误报）', () => {
+    const baseSrc = joined([
+      'package com.x;', '',
+      'public class Comments {',
+      '    public void alpha(long id) {',
+      '        int a = 1;',
+      '    }', '',
+      '    public String gamma(String s) {',
+      '        // 关联 task_id（同一次市调）',
+      '        return s;',
+      '    }',
+      '}', '',
+    ]);
+    // gamma 在 base/head 完全相同（未随改）；alpha 内新增同样的注释作为「改动链路」
+    const headSrc = baseSrc.replace('        int a = 1;', '        // 关联 task_id（同一次市调）\n        int a = 2;');
+    const dir = ownershipFixture({
+      base: { [JAVA]: baseSrc },
+      head: { [JAVA]: headSrc },
+      design: designFor('`alpha` 需要改；定位键为 `task_id`。', [JAVA]),
+    });
+    const r = runGate(dir, 'check-design-consistency', 'add-widget');
+    const w = (r.warnings || []).join('\n');
+    assert.ok(!/改动点完整性/.test(w), `注释里的 task_id 不应触发完整性警告: ${w}`);
+  });
+
+  run('方法体范围不越界：多行签名方法之后的兄弟方法不背锅', () => {
+    const baseSrc = joined([
+      'package com.x;', '',
+      'public class Over {',
+      '    private void alpha(String a) {',
+      '        int x = 1;',
+      '    }', '',
+      '    private void shared(String a,',
+      '            String b) {',
+      '        int y = 1;',
+      '    }', '',
+      '    private void gamma(String a) {',
+      '        shared("a", "b");',
+      '    }',
+      '}', '',
+    ]);
+    const headSrc = baseSrc.replace('        int x = 1;', '        int x = 2;');
+    const dir = ownershipFixture({
+      base: { [JAVA]: baseSrc },
+      head: { [JAVA]: headSrc },
+      design: designFor('`alpha` 与 `shared` 是改动链路。', [JAVA]),
+    });
+    const r = runGate(dir, 'check-design-consistency', 'add-widget');
+    const w = (r.warnings || []).join('\n');
+    assert.ok(!/改动点完整性/.test(w), `alpha 的方法体不应吞掉 shared/gamma 的调用: ${w}`);
+  });
+
+  run('真实归属漂移仍报警（防过度豁免）', () => {
+    const baseSrc = joined([
+      'package com.x;', '',
+      'public class Real {',
+      '    private void alpha(String a) {',
+      '        int x = 1;',
+      '    }', '',
+      '    private void unrelated(String a) {',
+      '        int y = 1;',
+      '    }',
+      '}', '',
+    ]);
+    const headSrc = baseSrc.replace('        int y = 1;', '        int y = 2;');
+    const dir = ownershipFixture({
+      base: { [JAVA]: baseSrc },
+      head: { [JAVA]: headSrc },
+      design: designFor('只改 `alpha`。', [JAVA]),
+    });
+    const r = runGate(dir, 'check-design-consistency', 'add-widget');
+    const w = (r.warnings || []).join('\n');
+    assert.match(w, /改动点归属/, `改动落进未被声称的方法时必须报警: ${w}`);
+    assert.match(w, /unrelated/, `警告应点名真实落点方法: ${w}`);
+  });
+
+  run('无修饰符方法（void foo(...)）也要被识别为声明', () => {
+    const lines = (marker) => [
+      'package com.x;', '',
+      'public class Bare {',
+      '    private void before(String a) {',
+      '        int a = 1;',
+      '    }', '',
+      '    void helper(String a) {',
+      marker,
+      '    }',
+      '}', '',
+    ];
+    const dir = ownershipFixture({
+      base: { [JAVA]: joined(lines('')) },
+      head: { [JAVA]: joined(lines('        int x = 2;')) },
+      design: designFor('`helper` 增加一行。', [JAVA]),
+    });
+    const r = runGate(dir, 'check-design-consistency', 'add-widget');
+    const w = (r.warnings || []).join('\n');
+    assert.ok(!/改动点归属/.test(w), `无修饰符方法不应被回溯归属到 before: ${w}`);
+  });
+
+  run('TS/JS function 声明与多行参数也要被识别', () => {
+    const TS = 'src/util.ts';
+    const lines = (marker) => [
+      'export function untouched(a: number) {',
+      '    return a;',
+      '}', '',
+      'function computeTotal(items: number[],',
+      '        ratio: number) {',
+      marker,
+      '    return ratio;',
+      '}', '',
+    ];
+    const dir = ownershipFixture({
+      base: { [TS]: joined(lines('')) },
+      head: { [TS]: joined(lines('    const total = ratio * 2;')) },
+      design: designFor('`computeTotal` 增加一行。', [TS]),
+    });
+    const r = runGate(dir, 'check-design-consistency', 'add-widget');
+    const w = (r.warnings || []).join('\n');
+    assert.ok(!/改动点归属/.test(w), `TS 声明不应被回溯归属到 untouched: ${w}`);
+  });
+
+  run('正则字面量里的反引号不得吞掉后续方法', () => {
+    const TS = 'src/parse.ts';
+    const lines = (marker) => [
+      'export function recognized(a: number) {',
+      '    return a;',
+      '}', '',
+      'export function parseRow(content: string) {',
+      '    return content.match(/^([T#]\\S+)\\s*:\\s*`([^`]+)`$/);',
+      '}', '',
+      'function computeTotal(items: number[],',
+      '        ratio: number) {',
+      marker,
+      '}', '',
+    ];
+    const dir = ownershipFixture({
+      base: { [TS]: joined(lines('')) },
+      head: { [TS]: joined(lines('    const total = ratio * 2;')) },
+      design: designFor('`computeTotal` 增加一行。', [TS]),
+    });
+    const r = runGate(dir, 'check-design-consistency', 'add-widget');
+    const w = (r.warnings || []).join('\n');
+    assert.ok(!/改动点归属/.test(w), `正则里的反引号不应破坏后续解析: ${w}`);
+  });
+
+  run('同名方法已在别处落地时不报声称未落地（跨文件同名消歧）', () => {
+    const ALPHA = 'src/main/java/com/x/Alpha.java';
+    const BETA = 'src/main/java/com/x/Beta.java';
+    const alphaLines = (marker) => [
+      'package com.x;', '',
+      'public class Alpha {',
+      '    public void target(String a) {',
+      marker,
+      '    }',
+      '}', '',
+    ];
+    const betaSrc = joined([
+      'package com.x;', '',
+      'public class Beta {',
+      '    public void target(String a) {',
+      '        int a1 = 1;',
+      '    }', '',
+      '    public void other(String a) {',
+      '        int b1 = 1;',
+      '    }',
+      '}', '',
+    ]);
+    const dir = ownershipFixture({
+      base: { [ALPHA]: joined(alphaLines('        int x = 1;')), [BETA]: betaSrc },
+      head: { [ALPHA]: joined(alphaLines('        int x = 2;')), [BETA]: betaSrc.replace('        int b1 = 1;', '        int b1 = 2;') },
+      design: designFor('上游 `Alpha.target` 需改；`target` 显式写 NORMAL；`other` 加一行。', [ALPHA, BETA]),
+    });
+    const r = runGate(dir, 'check-design-consistency', 'add-widget');
+    const w = (r.warnings || []).join('\n');
+    assert.ok(!/声称未落地/.test(w), `同名方法已在 Alpha 落地，不应反查 Beta: ${w}`);
+  });
+}
+
 console.log(`\n==== ${passed} passed, ${failed} failed ====`);
 process.exit(failed === 0 ? 0 : 1);
