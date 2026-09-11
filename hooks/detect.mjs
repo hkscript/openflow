@@ -252,7 +252,44 @@ function collectGitCommits(cwd, changeName) {
 }
 
 /**
+ * Split a plan-ready "改动文件"/"文件" value on 、/，/,/； separators while
+ * ignoring separators inside `[certainty-tag]` brackets, so annotations like
+ * `[Verified: 已存在，视核对结果可仅测试不改代码]` don't cut the entry apart.
+ */
+function splitFileEntries(text) {
+  const out = [];
+  let cur = '';
+  let depth = 0;
+  for (const ch of text) {
+    if (ch === '[') depth += 1;
+    else if (ch === ']') depth = Math.max(0, depth - 1);
+    if (depth === 0 && (ch === '、' || ch === '，' || ch === ',' || ch === '；' || ch === ';')) {
+      const piece = cur.trim();
+      if (piece) out.push(piece);
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  const tail = cur.trim();
+  if (tail) out.push(tail);
+  return out;
+}
+
+/**
+ * Strip a trailing certainty tag from an entry: `[Verified]`,
+ * `[Verified: 说明]`, `[Inferred: 说明]`, `[Assumption: 说明]`.
+ */
+function stripCertaintyTag(entry) {
+  return entry.replace(/\s*\[(?:Verified|Inferred|Assumption)[^\]]*\]\s*$/i, '').trim();
+}
+
+/**
  * Extract file paths from plan-ready.md's "改动文件" fields.
+ * Full paths (containing '/') are authoritative: they must exist on disk.
+ * Bare filenames (no '/') are shorthand: they resolve only when they uniquely
+ * match one already-found full path; otherwise they stay in `missing`
+ * (fail-closed, never silently dropped).
  * Returns {found: string[], missing: string[], total: number, allFound: boolean}.
  */
 function collectFileResolvability(cwd, changeDir) {
@@ -263,18 +300,22 @@ function collectFileResolvability(cwd, changeDir) {
   // Extract file paths from "改动文件" or "文件" fields
   // Patterns: `path/to/file.py`, src/path/File.java, etc.
   const pathRe = /(?:改动文件|文件|路径)[：:]\s*(.+)/gi;
-  const filePaths = [];
+  const candidates = [];
+  const seen = new Set();
+  const addCandidate = (raw) => {
+    if (!raw || seen.has(raw)) return;
+    seen.add(raw);
+    candidates.push(raw);
+  };
+
   for (const m of content.matchAll(pathRe)) {
-    const entries = m[1].split(/[,，、]/).map(s => s.trim()).filter(Boolean);
-    for (const entry of entries) {
-      // Extract backtick-quoted path or unquoted path-like string.
-      // Strip trailing certainty tags (spec.md 格式：`路径 [Verified]` / `[Assumption: 需确认路径]`),
-      // 否则 `src/base.py [Verified]` 会被当作字面路径，导致解析失败并触发矛盾遮蔽路由。
+    for (const entry of splitFileEntries(m[1])) {
       const btMatch = entry.match(/`([^`]+)`/);
-      const raw = (btMatch ? btMatch[1] : entry).replace(/\s*\[(?:Verified|Inferred|Assumption[^\]]*)\]\s*$/i, '').trim();
+      let raw = btMatch ? btMatch[1] : entry.replace(/^[-*]\s+/, '');
+      raw = stripCertaintyTag(raw);
       // Filter to likely file paths (containing / or .extension)
       if (raw.includes('/') || /\.[a-z]{2,6}$/i.test(raw)) {
-        filePaths.push(raw);
+        addCandidate(raw);
       }
     }
   }
@@ -282,22 +323,55 @@ function collectFileResolvability(cwd, changeDir) {
   // Also look for paths in backticks following common patterns
   const allBacktickPaths = [...content.matchAll(/`([^`]+\.[a-z]{2,6})`/gi)].map(m => m[1]);
   for (const p of allBacktickPaths) {
-    if (p.includes('/') && !filePaths.includes(p)) {
-      filePaths.push(p);
+    if (p.includes('/')) addCandidate(p);
+  }
+
+  if (candidates.length === 0) return null;
+
+  const baseName = (p) => p.slice(p.lastIndexOf('/') + 1);
+  const fullCandidates = candidates.filter((p) => p.includes('/'));
+  const bareCandidates = candidates.filter((p) => !p.includes('/'));
+  const found = [];
+  const missing = [];
+  const bareResolved = [];
+  const unresolved = [];
+
+  // Pass 1: full paths — authoritative existence check.
+  for (const fp of fullCandidates) {
+    if (exists(path.join(cwd, fp))) {
+      if (!found.includes(fp)) found.push(fp);
+    } else if (!missing.includes(fp)) {
+      missing.push(fp);
+      unresolved.push({ entry: fp, reason: 'not-found' });
     }
   }
 
-  if (filePaths.length === 0) return null;
-
-  const found = [];
-  const missing = [];
-  for (const fp of filePaths) {
-    const abs = path.join(cwd, fp);
-    if (exists(abs)) found.push(fp);
-    else missing.push(fp);
+  // Pass 2: bare filenames — unique basename match against found full paths.
+  for (const bare of bareCandidates) {
+    if (exists(path.join(cwd, bare))) {
+      if (!found.includes(bare)) found.push(bare);
+      continue;
+    }
+    const matches = found.filter((fp) => baseName(fp) === bare);
+    if (matches.length === 1) {
+      if (!bareResolved.includes(matches[0])) bareResolved.push(matches[0]);
+    } else if (matches.length === 0) {
+      missing.push(bare);
+      unresolved.push({ entry: bare, reason: 'bare-unresolved' });
+    } else {
+      missing.push(bare);
+      unresolved.push({ entry: bare, reason: 'ambiguous', matches });
+    }
   }
 
-  return { found, missing, total: filePaths.length, allFound: missing.length === 0 };
+  return {
+    found,
+    missing,
+    bareResolved,
+    unresolved,
+    total: candidates.length,
+    allFound: missing.length === 0,
+  };
 }
 
 /**

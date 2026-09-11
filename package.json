@@ -15,6 +15,14 @@
     "test:enforce": "pnpm run build && pnpm run test:enforce:unit",
     "test": "pnpm run test:enforce"
   },
+  "engines": {
+    "node": ">=20.0.0",
+    "runtime": {
+      "name": "node",
+      "version": "^20.0.0",
+      "onFail": "download"
+    }
+  },
   "keywords": [
     "claude-code",
     "codex",
@@ -29,14 +37,6 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/lininn/openflow.git"
-  },
-  "engines": {
-    "node": ">=20.0.0",
-    "runtime": {
-      "name": "node",
-      "version": "^20.0.0",
-      "onFail": "download"
-    }
   },
   "files": [
     "bin",

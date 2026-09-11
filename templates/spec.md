@@ -232,7 +232,7 @@ T-003: `tests/auth/test_session.py::test_token_expiry_triggers_refresh` ❌ FAIL
 - 目标：<做什么>
 - Test cases: T-001, T-002
 - Files: `src/auth/login.py`, `tests/auth/test_login.py`
-- 改动文件：<文件路径 [Verified] 或 [Assumption: 需确认路径]>
+- 改动文件：<完整路径（含目录，与 Files 行一致，禁止裸文件名缩写） [Verified] 或 [Assumption: 需确认路径]>
 - 覆盖场景：T-001, T-002（引用 test-plan.md 稳定 ID）
 - 测试先行：<先写哪个测试（T-00x），在哪个文件 [Verified]>
 - 验证方式：<运行什么测试命令，预期结果>
@@ -243,6 +243,7 @@ T-003: `tests/auth/test_session.py::test_token_expiry_triggers_refresh` ❌ FAIL
 **`Test cases` 与 `Files` 字段由 gate/enforce 逐行解析，必须存在：**
 - `- Test cases: T-001, T-002` — 引用 test-plan.md 中的稳定 ID（用逗号分隔）
 - `- Files: <文件路径>` — 该 task 允许修改的实现文件与测试文件（逗号分隔，路径可用 backtick）
+- `- 改动文件: ...` — 与 Files 行列同一批文件；每项必须是**完整路径（含目录）**，禁止只写文件名；多项用 `、` 或 `,` 分隔，确定性标签写在路径之后（如 `src/auth/login.py [Verified]`）
 - 可选 `- Test framework setup: <根配置文件>` — 声明任务需要的有限测试框架配置（仅允许框架已知的根文件）
 - `- [ ] <任务名>` — 每 task 一行 checkbox，build 完成时改为 `- [x]`；detect/`check-build-done` 按 `[x]`/`[ ]` 统计进度
 

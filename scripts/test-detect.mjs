@@ -486,5 +486,116 @@ run('close 阶段无 receipt -> 矛盾 + 不自动建议 close', () => {
   assert.equal(json.suggested_phase, null);
 });
 
+console.log('\n[7] file_resolvability — shorthand / tag parsing');
+
+function fileResolvabilityOf(dir) {
+  const json = runDetect(dir);
+  const fr = json.signals.file_resolvability && json.signals.file_resolvability.value;
+  assert.ok(fr, 'file_resolvability signal computed');
+  return { json, fr };
+}
+
+run('改动文件裸文件名可唯一匹配 Files 完整路径 -> 不误报 missing', () => {
+  const dir = tmpdir();
+  mkChange(dir, 'add-widget');
+  const realFiles = [
+    'src/entity/FollowStatusEntity.java',
+    'src/enums/FollowSubStatusEnum.java',
+    'src/mapper/FollowStatusMapper.xml',
+    'src/config/PriceResearchSellConfig.java',
+  ];
+  for (const f of realFiles) write(dir, f, '// fixture\n');
+  const planReady = [
+    '# Plan Ready',
+    '## Task 1',
+    '- [x] task one done',
+    '- Files: `src/entity/FollowStatusEntity.java`, `src/enums/FollowSubStatusEnum.java`, `src/mapper/FollowStatusMapper.xml`, `src/config/PriceResearchSellConfig.java`',
+    '- 改动文件：FollowStatusEntity.java、FollowStatusMapper.xml、PriceResearchSellConfig.java [Verified]；FollowSubStatusEnum.java [Inferred: 新增文件]',
+    '- Test cases: T-001',
+    '',
+  ].join('\n');
+  write(dir, 'openspec/changes/add-widget/plan-ready.md', planReady);
+  const { json, fr } = fileResolvabilityOf(dir);
+  assert.equal(fr.missing.length, 0, `missing=${JSON.stringify(fr.missing)}`);
+  assert.equal(fr.allFound, true);
+  assert.ok(!JSON.stringify(json.contradictions).includes('file_resolvability'), 'no file_resolvability contradiction');
+});
+
+run('确定性标签内的分隔符不切断完整路径', () => {
+  const dir = tmpdir();
+  mkChange(dir, 'add-widget');
+  write(dir, 'src/helper/FollowPriceHelper.java', '// fixture\n');
+  write(dir, 'src/helper/FollowPriceHelperActivityStateTest.java', '// fixture\n');
+  const planReady = [
+    '# Plan Ready',
+    '## Task 2',
+    '- [x] task two done',
+    '- 改动文件：src/helper/FollowPriceHelper.java [Verified: 已存在，视核对结果可仅测试不改代码]；src/helper/FollowPriceHelperActivityStateTest.java [Inferred: 新增测试文件]',
+    '- Test cases: T-002',
+    '',
+  ].join('\n');
+  write(dir, 'openspec/changes/add-widget/plan-ready.md', planReady);
+  const { json, fr } = fileResolvabilityOf(dir);
+  assert.equal(fr.missing.length, 0, `missing=${JSON.stringify(fr.missing)}`);
+  assert.equal(fr.allFound, true);
+  assert.ok(!JSON.stringify(json.contradictions).includes('file_resolvability'), 'no file_resolvability contradiction');
+});
+
+run('完整路径真实缺失 -> 仍报 missing（fail-closed）', () => {
+  const dir = tmpdir();
+  mkChange(dir, 'add-widget');
+  write(dir, 'src/entity/Exists.java', '// fixture\n');
+  const planReady = [
+    '# Plan Ready',
+    '## Task 1',
+    '- [x] task one done',
+    '- Files: `src/entity/MissingService.java`',
+    '- 改动文件：src/entity/MissingService.java [Verified]',
+    '- Test cases: T-001',
+    '',
+  ].join('\n');
+  write(dir, 'openspec/changes/add-widget/plan-ready.md', planReady);
+  const { fr } = fileResolvabilityOf(dir);
+  assert.equal(fr.allFound, false);
+  assert.ok(fr.missing.includes('src/entity/MissingService.java'), `missing=${JSON.stringify(fr.missing)}`);
+});
+
+run('裸文件名无任何匹配完整路径 -> 仍按 missing 处理（不静默通过）', () => {
+  const dir = tmpdir();
+  mkChange(dir, 'add-widget');
+  const planReady = [
+    '# Plan Ready',
+    '## Task 1',
+    '- [x] task one done',
+    '- 改动文件：Orphan.java [Verified]',
+    '- Test cases: T-001',
+    '',
+  ].join('\n');
+  write(dir, 'openspec/changes/add-widget/plan-ready.md', planReady);
+  const { fr } = fileResolvabilityOf(dir);
+  assert.equal(fr.allFound, false);
+  assert.ok(fr.missing.includes('Orphan.java'), `missing=${JSON.stringify(fr.missing)}`);
+});
+
+run('裸文件名歧义（同名多路径）-> 不静默解析', () => {
+  const dir = tmpdir();
+  mkChange(dir, 'add-widget');
+  write(dir, 'src/a/Config.java', '// fixture\n');
+  write(dir, 'src/b/Config.java', '// fixture\n');
+  const planReady = [
+    '# Plan Ready',
+    '## Task 1',
+    '- [x] task one done',
+    '- Files: `src/a/Config.java`, `src/b/Config.java`',
+    '- 改动文件：Config.java',
+    '- Test cases: T-001',
+    '',
+  ].join('\n');
+  write(dir, 'openspec/changes/add-widget/plan-ready.md', planReady);
+  const { fr } = fileResolvabilityOf(dir);
+  assert.equal(fr.allFound, false);
+  assert.ok(fr.missing.includes('Config.java'), `missing=${JSON.stringify(fr.missing)}`);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);
