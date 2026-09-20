@@ -162,12 +162,20 @@ printf '%s\n' '{"version":1,"change":"<变更名>","phase":"build","mode":"task-
 - 非 build 阶段**不允许携带 `mode`/`task`**；build 必须有 `mode`；`task-build` 必须有数字 `task`
 - phase 指向缺失或已归档的 change 时视为无效，除修复 `.openflow/phase` 外禁止写入
 - 测试计划每行给出稳定 ID `T-001` 与确定性选择器（`tests/auth/test_login.py::test_login_with_valid_credentials`）；plan-ready 任务绑定同一稳定 ID（`Test cases: T-001`）
-- **test-plan 稳定行是可选的带状态语法**：`T-001: \`<测试文件>::<测试函数>\``（可加后缀 `✅ PASS` / `⬜ TODO` / `❌ FAIL`）。enforcement / Gate / detect 都解析同一语法；build 更新状态只在行尾追加后缀，不改选择器
+- **test-plan 稳定行是可选的带状态语法**：`T-001: \`<测试文件>::<测试函数>\``（可加后缀 `🔴 RED` / `✅ PASS` / `⬜ TODO` / `❌ FAIL`）。enforcement / Gate / detect 都解析同一语法；build 更新状态只在行尾追加后缀，不改选择器
+- **`✅ PASS` 必须同时带 `🔴 RED`**：RED 是 build Step 2「见过它失败」的凭据，缺了 gate 判 `red_evidence_missing`、detect 路由回 build。没见过红的测试不证明任何事——只钉负空间的断言（`never()`/`assertNull`/"不抛异常"）在实现前就是绿的，零副作用的回归照样让它绿
+- **不变量行 `INV-001: \`<选择器>\` covers T-003, T-007`**：跨组合的正向不变量，与 T 行同权（要被 task 引用、要有 RED）。守卫/状态机改动必写——`1 scenario = 1 test` 只覆盖写下来的那几格，组合空白格正是回归藏身处
 - 迁移期旧的唯一 `#N` 引用可临时使用，但下次 spec/amend 编辑时必须转为稳定 ID；混合 / 重复 / 歧义引用会 fail-closed 报错
 
 ## 客户端支持（生命周期运行时）
 
-enforcement / gate / detect / receipt / archive 的**生命周期运行时**由 **Claude Code** 与 **OpenCode** 安装（hooks 目录随客户端安装自动生成）。**codex / cursor 只安装 skills**——不安装 hooks/plugin 运行时，其 openflow 流程是**提示词级指导**：gate/detect 脚本不可用，阶段写入边界、receipt、`archive-verified` 均不强制执行，相关命令退回手动检查。若本地没有 gate/detect 脚本（codex/cursor，或旧版未升级），跳过相关命令，按各阶段模板的「手动检查」降级执行。
+openflow 只支持能运行强制层的客户端：**Claude Code、Codex、OpenCode**。每个客户端都装完整生命周期运行时——enforcement、gate、detect、receipt、archive 一个不少。Cursor 没有 hook/plugin 机制，无法运行强制层，因此**不支持**，`openflow init --tools cursor` 会直接报错退出。
+
+**没有降级模式。** 如果 gate/detect 脚本找不到、或运行报错，说明安装损坏或版本不匹配——**立即停止当前阶段并告知用户重装**，不要改用手动检查凑合过去：
+
+> "❌ 找不到 `<path>/openflow-gate.mjs`（或执行失败）。openflow 的阶段闸门依赖它，没有它无法保证规格与实现一致。请重新安装：`openflow init --tools <客户端>`，然后重试。"
+
+手动 grep 替代不了闸门：它不校验 receipt 指纹、不做改动点归属对账、不阻断越界写入。用手动检查"通过"一个阶段，等于把未验证的改动当成已验证——这正是 openflow 要消灭的失败模式。
 
 ## 子命令路由（必须读取对应参考文件）
 
@@ -213,31 +221,16 @@ node <base>/.claude/hooks/openflow-detect.mjs
 ls ~/.claude/hooks/openflow-detect.mjs && node ~/.claude/hooks/openflow-detect.mjs
 ```
 
-以上位置都没有该脚本时（旧版 openflow 未升级或 helpers 未安装），回退到下方"手动状态检测"，**不要臆造路径继续运行**。
+以上位置都没有该脚本时，**停止并要求用户重装**（见「客户端支持」），不要臆造路径、也不要改用手动检查继续。
 
-脚本收集以下信号并输出 JSON：
+脚本输出 JSON：每个信号自带 `reliability`（high/medium/low），交叉验证规则写死在脚本里，不依赖 AI 推理。**你只需遵守两条**：
 
-| 信号 | 来源 | 可靠性 | 说明 |
-|------|------|--------|------|
-| active_changes | `openspec/changes/` 非 archive 目录 | high | 活跃变更列表 |
-| test_plan / test_plan_stats | 变更目录下 test-plan.md | high | PASS/TODO/FAIL 计数 |
-| plan_ready / plan_ready_tasks | 变更目录下 plan-ready.md | high | [x]/[ ] 计数 |
-| git_commits | `git log --oneline -30` | high | ground truth，不可伪造 |
-| superpowers_plan | `docs/superpowers/plans/` | medium | 可能残留旧文件 |
-| file_resolvability | plan-ready 中改动文件可找到 | low | 多仓库或路径写错会误判 |
-| building_marker | `.openflow/building` | high | build 阶段标记 |
-| verify_issues | verify-issues.md | medium | verify 阶段产物；unresolved_count 未解决项计数 |
-| lessons | lessons.md | low | close 阶段产物 |
+1. **`contradictions` 非空** → 不同信号源给出相反结论。禁止基于单点否定跳到结论，必须展示信号矩阵并用 AskUserQuestion 让用户确认。
+2. **`contradictions` 为空** → 按 `suggested_phase` 路由。
 
-**读取输出的 JSON。如果 `contradictions` 非空，说明不同信号源给出相反结论——禁止基于单点否定跳到结论，必须展示信号矩阵并用 AskUserQuestion 让用户确认。如果无矛盾，按 `suggested_phase` 路由。**
+不要在 JSON 之外自行推断状态——脚本看到的信号比你多（git log、building 标记、receipt 指纹）。
 
-交叉验证规则（写死在脚本中，不依赖 AI 推理）：
-
-1. 若 reliability=low 的否定信号 + reliability≥medium 的 ≥2 个肯定信号 → contradiction
-2. 若 test-plan 全 PASS + git 有 commit + plan-ready 全 [x]，仅 file_resolvability 有缺失 → 建议 verify，不判"未开始"
-3. 若 test-plan 全 PASS + plan-ready 全 [x] 但 `.openflow/building` 仍存在 → building 标记残留，提醒清理
-
-判定结果：
+`suggested_phase` 的取值含义：
 - **信号矛盾**（contradictions 非空）→ 展示信号矩阵 + AskUserQuestion 确认，不自动路由
 - 无活跃变更 → proposal 阶段
 - **有 2+ 个活跃变更 → 列出所有变更让用户选择，然后根据选中变更的状态继续路由**
@@ -247,22 +240,6 @@ ls ~/.claude/hooks/openflow-detect.mjs && node ~/.claude/hooks/openflow-detect.m
 - 实现已完成（所有测试 PASS） → verify 阶段
 - verify 已通过 → close 阶段
 - **test-plan 全 PASS 但 verify-issues.md 仍有未解决项 → 建议「重跑 verify」而非 close**（记录陈旧）
-
-### 手动状态检测（脚本不可用时的降级方案）
-
-如果 `openflow-detect.mjs` 不存在（旧版 openflow 未升级），手动执行以下步骤，**且必须遵守铁律 5（否定即暂停）**：
-
-| 检查项 | 怎么查 | 结果 | 可靠性 |
-|--------|--------|------|--------|
-| 有活跃变更？ | `ls openspec/changes/` 下是否有非 archive 子目录 | 有→继续 | high |
-| git 有实现 commit？ | `git log --oneline -20` | 有→肯定信号 | high |
-| 有 test-plan.md？ | 变更目录下是否存在 | 有→看测试状态 | high |
-| 有 plan-ready.md？ | 变更目录下是否存在 | 有→看实现状态 | high |
-| 实现已开始？ | `ls docs/superpowers/plans/` | 有→肯定信号 | medium |
-| 测试全部通过？ | test-plan.md 中 PASS/TODO/FAIL | 全部 PASS→肯定信号 | medium |
-| 改动文件可找到？ | plan-ready.md 列出的文件逐个 ls | 全找到→肯定，缺几个→低权重 | low |
-
-**矛盾信号处理**：高/中可靠性 ≥2 肯定信号 + 低可靠性否定信号 → 暂停确认，不判"未开始"。
 
 ## 路由
 

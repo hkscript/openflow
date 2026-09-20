@@ -5,11 +5,15 @@
  * Covers:
  *   [1] dependency-check 识别 superpowers 插件形式（不再误报缺失）
  *   [2] writing-plans-gate 防火墙：标记/缺失/排除路径/逃生舱 各场景
- *   [3] 四向一致性矩阵：shared rules / Claude enforce.mjs / OpenCode plugin / Codex hook
- *       对每个 fixture 产出完全相同的 sorted level:id 向量。
+ *   [3] 四向一致性矩阵：shared rules / Claude adapter / OpenCode plugin bundle /
+ *       Codex hook 对每个 fixture 产出完全相同的 sorted level:id 向量。
  *
- * 用法：先 `pnpm run build`（[1] 依赖 dist/，[3] 依赖 dist/enforce/rules.js 与
- * dist/enforce/opencode.js / dist/enforce/codex.js），再 `pnpm node scripts/test-enforce.mjs`。
+ * 三个适配器都只做 I/O 转换，策略只有 src/enforce/rules.ts 一份；矩阵验证的是
+ * 「适配器没有偷偷改变语义」，以及 OpenCode 那份**发布产物**（构建期内联的
+ * opencode-plugin.mjs，不是 tsc 中间产物）与共享策略一致。
+ *
+ * 用法：先 `pnpm run build`，再 `pnpm node scripts/test-enforce.mjs`。
+ * dist/ 缺失即判失败——不跳过，否则等于放行未验证的强制层。
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -25,10 +29,11 @@ if (Number(process.versions.node.split('.')[0]) < 20) {
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const HOOK = path.resolve(__dirname, '..', 'hooks', 'enforce.mjs');
 const DIST_DEP = path.resolve(__dirname, '..', 'dist', 'core', 'dependency-check.js');
 const DIST_RULES = path.resolve(__dirname, '..', 'dist', 'enforce', 'rules.js');
-const DIST_OPENCODE = path.resolve(__dirname, '..', 'dist', 'enforce', 'opencode.js');
+const HOOK = path.resolve(__dirname, '..', 'dist', 'enforce', 'claude.js');
+// The shipped OpenCode artifact, not the tsc intermediate: that is what init installs.
+const DIST_OPENCODE = path.resolve(__dirname, '..', 'dist', 'enforce', 'opencode-plugin.mjs');
 const DIST_CODEX = path.resolve(__dirname, '..', 'dist', 'enforce', 'codex.js');
 
 let passed = 0;
@@ -206,9 +211,15 @@ console.log('\n[2] writing-plans-gate 防火墙行为 (enforce.mjs)');
 // ---- [3] Four-way conformance matrix ----
 console.log('\n[3] 四向一致性矩阵 (rules / enforce.mjs / opencode / codex)');
 
-if (!fs.existsSync(DIST_RULES) || !fs.existsSync(DIST_OPENCODE) || !fs.existsSync(DIST_CODEX)) {
-  console.log('  ⏭️  跳过：dist/enforce 未构建，请先 `pnpm run build`');
-} else {
+{
+  // Missing build output is a failure, never a skip: silently skipping the
+  // conformance matrix would let an unverified enforcement layer ship.
+  for (const artifact of [DIST_RULES, DIST_OPENCODE, DIST_CODEX, HOOK]) {
+    if (!fs.existsSync(artifact)) {
+      console.error(`  ❌ 构建产物缺失：${path.relative(path.resolve(__dirname, '..'), artifact)} —— 先跑 \`pnpm run build\``);
+      process.exit(1);
+    }
+  }
   const rules = await import(pathToFileURL(DIST_RULES).href);
   const opencodePlugin = (await import(pathToFileURL(DIST_OPENCODE).href)).default;
   const codex = await import(pathToFileURL(DIST_CODEX).href);

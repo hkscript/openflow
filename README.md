@@ -20,18 +20,20 @@ openflow init --tools claude,codex,opencode
 ```
 
 `init` will automatically:
-1. Detect and guide OpenSpec CLI installation
-2. Detect Superpowers and show install instructions
-3. Check if OpenSpec is initialized in the project
+1. Require the OpenSpec CLI (offers to install it; exits non-zero if still missing)
+2. Require Superpowers writing-plans (exits non-zero if missing — build cannot run without it)
+3. Require an initialized `openspec/` directory
 4. Generate OpenFlow skills and lifecycle runtime artifacts for the selected clients
 
-Supported tools: `claude`, `codex`, `opencode`, `cursor` (comma-separated)
+Supported tools: `claude`, `codex`, `opencode` (comma-separated). Cursor is not supported: it has no
+hook or plugin mechanism, so the phase gates, verify receipt and verified archive cannot be
+enforced there — `init` rejects it rather than installing skills that only look enforced.
 
 ### Install skills globally
 
 ```bash
 openflow init --tools claude -g
-openflow init --tools claude,codex,opencode,cursor --global
+openflow init --tools claude,codex,opencode --global
 ```
 
 With `-g` / `--global`, `openflow` installs skills under the selected tools' home directories:
@@ -41,7 +43,6 @@ With `-g` / `--global`, `openflow` installs skills under the selected tools' hom
 | `claude` | `~/.claude/skills/openflow/` |
 | `codex` | `~/.agents/skills/openflow/` |
 | `opencode` | `~/.config/opencode/skills/openflow/` |
-| `cursor` | `~/.cursor/skills/openflow/` |
 
 ### Client runtime support
 
@@ -50,7 +51,6 @@ With `-g` / `--global`, `openflow` installs skills under the selected tools' hom
 | `claude` | `.claude/skills/` | `.claude/hooks/` | `/openflow ...` |
 | `codex` | `.agents/skills/` | `.codex/hooks/` + `.codex/hooks.json` | `$openflow ...` or `/skills` |
 | `opencode` | `.opencode/skills/` | `.opencode/plugins/` and `.opencode/hooks/` | Natural-language skill selection |
-| `cursor` | `.cursor/skills/` | Not installed | Client skill selection |
 
 Codex hooks are registered for `apply_patch`. After installing or updating,
 review and trust the repository hook with Codex `/hooks`; OpenFlow never enables

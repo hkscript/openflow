@@ -10,14 +10,19 @@
  *
  * Subcommands:
  *   check-proposal        — validate proposal.md format
- *   check-test-plan       — test-plan.md integrity
- *   check-cross-ref       — plan-ready ↔ test-plan cross-reference
+ *   check-test-plan       — test-plan.md integrity：状态统计、桩残留、选择器唯一归属，
+ *                            外加 RED 证据（✅ PASS 行必须带 🔴 RED，否则这条"通过"没见过红）
+ *                            与不变量行（`INV-00x: \`选择器\` covers T-00x, …`）的 covers 对账
+ *   check-cross-ref       — plan-ready ↔ test-plan cross-reference（T-id 与 INV-id 同权）
  *   check-build-done      — build completion
  *   check-close-ready     — close pre-conditions
  *   check-verify-issues   — verify-issues.md 未解决项检查
  *   check-design-consistency — design.md「改动文件」节 vs plan-ready + git（basename 兜底、跨仓库跳过）；
- *                            扩展：改动点归属对账（claim-vs-actual + 声称未落地反查）与并行入口完整性（共享下游链路，warning 级）；
- *                            归属解析支持跨行签名（括号/花括号配对），并豁免本次新增方法/直接下游/"无代码改动"目标；
+ *                            扩展：改动点归属对账。design 必须把每个改动点声明成 `文件路径::方法名`
+ *                            （语法同 test-plan 稳定行），声明缺失/格式错 = blocker，gate 不猜；
+ *                            归属漂移与声称未落地据此**精确判定**（带文件归属，不再靠裸方法名撞），
+ *                            并行路径完整性仍是启发式发现，范围限同文件同前缀兄弟方法（warning 级）；
+ *                            归属解析支持跨行签名（括号/花括号配对），豁免本次新增方法/直接下游/「不随改」声明；
  *                            diff 含基准分支累计改动（git diff <base>...HEAD），不只看未提交
  *   check-amend-count     — amendment tracking
  *   check-writing-plans   — writing-plans availability
@@ -141,16 +146,29 @@ function checkProposal(cwd, changeName) {
 
 // The canonical test-plan grammar emitted by the spec template: one stable row
 // per test case — `T-001: \`tests/auth/test_login.py::test_login_with_valid_credentials\`` —
-// optionally followed by a status suffix (`✅ PASS` / `⬜ TODO` / `❌ FAIL`).
-// This exact regex is replicated in five places (gate.mjs / detect.mjs /
-// enforce.mjs / opencode.ts / rules.ts); keep them in sync (review M3). Here the
-// captured suffix drives pass/todo/fail stats.
+// optionally followed by status markers: the RED evidence marker (`🔴 RED`,
+// appended at TDD Step 2 when the finished assertion was observed failing) and
+// the result marker (`✅ PASS` / `⬜ TODO` / `❌ FAIL`).
+//
+// Invariant rows share the grammar with an `INV-` id plus a `covers` clause:
+//   INV-001: `tests/price_test.py::test_apply_today_always_acts` covers T-003, T-007 🔴 RED ✅ PASS
+// They exist because a cross-combination invariant ("this input class must
+// always produce an observable effect") belongs to no single scenario, and a
+// plan that can only express one-scenario-one-test pushes authors toward
+// negative-space assertions that a do-nothing regression satisfies.
+//
+// This exact regex is replicated in three places (gate.mjs / detect.mjs /
+// rules.ts — the client adapters share rules.ts); keep them in sync. Here the
+// captured suffix drives pass/todo/fail stats and the RED evidence check.
+const CANONICAL_ROW_RE = /^([T#]\S+|INV-\d+)\s*:\s*`([^`]+)`(?:\s+(.+))?$/;
+const RED_MARKER_RE = /🔴|\bRED\b/;
+
 function parseCanonicalTestRows(content) {
   const out = [];
   for (const line of content.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    const m = trimmed.match(/^([T#]\S+)\s*:\s*`([^`]+)`(?:\s+(.+))?$/);
+    const m = trimmed.match(CANONICAL_ROW_RE);
     if (!m) continue;
     const id = m[1];
     const selector = m[2].trim();
@@ -160,7 +178,25 @@ function parseCanonicalTestRows(content) {
     let status = 'todo';
     if (/FAIL|❌/.test(suffix)) status = 'fail';
     else if (/PASS|✅/.test(suffix)) status = 'pass';
-    out.push({ id, file, selector, status });
+    // `covers T-003, T-007` — read up to the first status marker so the marker
+    // text can never be swallowed into the id list.
+    const covers = [];
+    const cm = suffix.match(/covers\s+([^🔴✅❌⬜]+)/i);
+    if (cm) {
+      for (const tok of cm[1].split(/[,\s]+/)) {
+        const t = tok.trim().replace(/^`|`$/g, '');
+        if (/^(?:T-\d+|#\d+)$/.test(t)) covers.push(t);
+      }
+    }
+    out.push({
+      id,
+      file,
+      selector,
+      status,
+      red: RED_MARKER_RE.test(suffix),
+      kind: id.startsWith('INV-') ? 'invariant' : 'test',
+      covers,
+    });
   }
   return out;
 }
@@ -182,7 +218,7 @@ function parsePlanReadyTaskBlocks(content) {
     if (tc) {
       for (const tok of tc[1].split(/[,\s]+/)) {
         const t = tok.trim().replace(/^`|`$/g, '');
-        if (/^(?:T-\d+|#\d+)$/.test(t)) cur.testIds.push(t);
+        if (/^(?:T-\d+|INV-\d+|#\d+)$/.test(t)) cur.testIds.push(t);
       }
       continue;
     }
@@ -267,14 +303,46 @@ function checkTestPlan(cwd, changeName) {
   const rows = parseCanonicalTestRows(content);
   let pass = 0, todo = 0, fail = 0, total = 0;
   const testFiles = new Set();
+  // A row marked PASS whose assertion was never observed failing is not
+  // evidence of anything: an assertion with no failing power (only `never()`
+  // style checks, or no assertion at all) is green from the first run. The RED
+  // marker is the one machine-checkable trace of TDD Step 2.
+  const redIssues = [];
+  const invIssues = [];
 
   if (rows.length > 0) {
+    const idSet = new Set(rows.map((r) => r.id));
     for (const r of rows) {
       total++;
       if (r.status === 'pass') pass++;
       else if (r.status === 'fail') fail++;
       else todo++;
       testFiles.add(r.file);
+      if (r.status === 'pass' && !r.red) {
+        redIssues.push({
+          type: 'red_evidence_missing',
+          id: r.id,
+          detail: `${r.id} 标记 ✅ PASS 但没有 🔴 RED 证据 — 没见过它红的测试不算验证（TDD Step 2）`,
+        });
+      }
+      if (r.kind === 'invariant') {
+        if (r.covers.length === 0) {
+          invIssues.push({
+            type: 'invariant_covers_missing',
+            id: r.id,
+            detail: `${r.id} 缺少 \`covers T-00x, …\` 子句 — 不变量行必须声明它横跨哪些场景`,
+          });
+        }
+        for (const c of r.covers) {
+          if (!idSet.has(c)) {
+            invIssues.push({
+              type: 'invariant_covers_unknown',
+              id: r.id,
+              detail: `${r.id} 声明覆盖 ${c}，但 test-plan 里没有 ${c} 这一行`,
+            });
+          }
+        }
+      }
     }
   } else {
     // Legacy table rows (`| 1 | … | ✅ PASS |`).
@@ -289,9 +357,19 @@ function checkTestPlan(cwd, changeName) {
       if (!headerSkipped) { headerSkipped = true; continue; }
 
       total++;
-      if (/✅|PASS/i.test(line)) pass++;
+      const isPass = /✅|PASS/i.test(line);
+      if (isPass) pass++;
       else if (/FAIL|❌.*FAIL/i.test(line)) fail++;
       else todo++;
+      // Legacy table rows carry the RED marker in the same status cell:
+      // `| 1 | 场景一 | ✅ PASS 🔴 RED |`.
+      if (isPass && !RED_MARKER_RE.test(line)) {
+        redIssues.push({
+          type: 'red_evidence_missing',
+          id: `row-${total}`,
+          detail: `第 ${total} 行标记 PASS 但没有 🔴 RED 证据 — 没见过它红的测试不算验证（TDD Step 2）`,
+        });
+      }
 
       for (const m of line.matchAll(fileRe)) {
         const p = m[1].split('::')[0]; // strip function name
@@ -306,6 +384,8 @@ function checkTestPlan(cwd, changeName) {
   if (rows.length > 0) {
     for (const d of findDuplicateSelectorIssues(rows)) issues.push(d);
   }
+  for (const r of redIssues) issues.push(r);
+  for (const i of invIssues) issues.push(i);
 
   // Firewall: check actual test files for TODO stubs
   const stubIssues = [];
@@ -334,12 +414,16 @@ function checkTestPlan(cwd, changeName) {
     });
   }
 
+  const structurallyClean = fail === 0 && stubIssues.length === 0
+    && redIssues.length === 0 && invIssues.length === 0;
   return {
-    pass: total > 0 && fail === 0 && stubIssues.length === 0,
-    stats: { pass, todo, fail, total },
+    pass: total > 0 && structurallyClean,
+    stats: { pass, todo, fail, total, red_missing: redIssues.length },
     issues,
-    all_pass: total > 0 && pass === total && stubIssues.length === 0,
+    all_pass: total > 0 && pass === total && structurallyClean,
     stub_issues: stubIssues,
+    red_issues: redIssues,
+    invariant_issues: invIssues,
   };
 }
 
@@ -385,7 +469,7 @@ function checkCrossRef(cwd, changeName) {
       binding.set(id, list);
     }
   }
-  const usesStable = tpIds.some((id) => /^T-/.test(id));
+  const usesStable = tpIds.some((id) => /^(?:T-|INV-)/.test(id));
   if (!usesStable) {
     for (const m of prContent.matchAll(/#(\d+)/g)) {
       const id = `#${parseInt(m[1])}`;
@@ -475,7 +559,14 @@ function checkBuildDone(cwd, changeName) {
   }
 
   const issues = [];
-  if (!tpResult.all_pass) issues.push({ type: 'tests_not_all_pass', detail: `${tpResult.stats?.fail ?? 0} FAIL, ${tpResult.stats?.todo ?? 0} TODO` });
+  if (!tpResult.all_pass) {
+    issues.push({
+      type: 'tests_not_all_pass',
+      detail: `${tpResult.stats?.fail ?? 0} FAIL, ${tpResult.stats?.todo ?? 0} TODO, ${tpResult.stats?.red_missing ?? 0} 缺 RED 证据`,
+    });
+  }
+  for (const r of tpResult.red_issues ?? []) issues.push(r);
+  for (const i of tpResult.invariant_issues ?? []) issues.push(i);
   if (!allTasksDone) issues.push({ type: 'tasks_not_all_done', detail: tasksDetail });
 
   return {
@@ -692,30 +783,37 @@ function checkDesignConsistency(cwd, changeName, opts = {}) {
     }
   }
 
-  // 改动点归属 / 完整性对账（warning 级，宁漏勿误；gate.config 的 change_point_check=false 可关闭）
-  if (config.change_point_check !== false) {
-    warnings.push(...checkChangePointOwnership(cwd, changeName, designContent, config));
+  // 改动点声明：解析失败是 blocker，不是 warning。声明是 spec 阶段的产物契约——
+  // 格式错了说明 spec 没写完，gate 不去猜；猜出来的对账等于没对账。
+  const { points, errors: declErrors } = parseChangePointDeclarations(designContent);
+  blockers.push(...declErrors);
+  if (!declErrors.length && !points.length && extractSection(designContent, '现状与影响面')) {
+    blockers.push('design.md「现状与影响面」没有任何 `### 改动点 N` 小节——改动点必须逐个声明 `文件路径::方法名`，否则无法做归属对账');
   }
 
-  // 改动点逐条机械判定：design 每个改动点声称的目标方法 vs 关键词实际落点（verify 清单以此为据，AI 只补充依据）
-  const change_point_verdicts = changePointVerdicts(cwd, changeName, designContent);
+  // 改动点归属 / 完整性对账（warning 级；gate.config 的 change_point_check=false 可关闭）
+  if (config.change_point_check !== false) {
+    warnings.push(...checkChangePointOwnership(cwd, changeName, points, config));
+  }
+
+  // 改动点逐条机械判定：声明的 `文件::方法` vs diff 实际落点（verify 清单以此为据，AI 只补充依据）
+  const change_point_verdicts = changePointVerdicts(cwd, changeName, points, config);
 
   return { pass: blockers.length === 0, design_exists: true, design_file_count: designPaths.length, blockers, warnings, change_point_verdicts };
 }
 
-// ---- 改动点归属对账（warning 级，宁漏勿误） ----
-// 设计阶段若方法名与行号漂移（例：design 声称改 A 方法、行号却指 B 方法的方法体），实现按行号落点会把改动插进错误方法；
-// 三类检查：
-// ① 归属漂移——diff hunk 实际所在方法是否在 design 声称集合内（已提交的 base diff 也查，不只未提交）；
-// ② 声称未落地——design backtick 声称的改动目标方法，若其文件有改动却无 hunk 落进它 → 未实现或已提交，反方向兜底；
-// ③ 完整性——命名不限：任何未覆盖的方法调用 design 点名的下游链路方法就报；同前缀兄弟方法（New/Old/V2）共享下游调用兜底。
+// ---- 改动点归属对账 ----
+// 设计阶段若方法名与行号漂移（例：design 声称改 A 方法、行号却指 B 方法的方法体），实现按行号落点会把改动插进错误方法。
+// 对账以 design 的**声明**为准（`文件路径::方法名`，见 parseChangePointDeclarations）：
+//   ① 归属漂移——hunk 落点方法不在该文件的声明集合里（精确：按文件比对）；
+//   ② 声称未落地——声明「随改」的方法体内没有任何 hunk（精确：按文件+行区间比对）；
+//   ③ 完整性——同文件里声明目标的同前缀兄弟方法（New/Old/V2）未被声明（启发式发现，warning）。
 // 精度规则（2026-09 修复：多行签名漏识别导致的成片误报）：
 //   · 方法声明按括号/花括号配对解析，支持 Java/TS 等换行签名；调用点续行（`&& f(...)) {`）不算声明；
 //   · hunk 区域扫描覆盖 newStart..newStart+min(newCount,12)，且只认"注释/注解/字段声明之后紧跟"的声明；
-//   · 本次 diff 新增的方法、design 点名方法的同文件直接下游不算"归属漂移"（新增/下沉属正常分工）；
-//   · 声称未落地按行区间重叠判定落点（大 hunk 覆盖多方法），并豁免"无代码改动"与纯既有代码引用（[Verified]/复用/同构）。
-// 注意：③ 依赖 design 点名下游链路；② 只覆盖 backtick 命名的目标、①/③ 的同前缀部分只覆盖"同前缀 + 已知后缀"命名。
-// 启发式找不到声明就静默跳过，跨仓库/测试文件不参与。
+//   · 本次 diff 新增的方法、声明目标的同文件直接下游不算"归属漂移"（新增/下沉属正常分工）；
+//   · ② 按行区间重叠判定落点（大 hunk 覆盖多方法），「不随改」声明是显式豁免。
+// 跨仓库/测试文件不参与。
 
 const METHOD_DECL_RES = {
   py: /^\s*(?:async\s+)?def\s+([A-Za-z_$][\w$]*)\s*\(/,
@@ -895,8 +993,6 @@ function isControlKeyword(name) {
   return CONTROL_KEYWORDS.has(name);
 }
 
-// 太通用的方法调用不能当"改动链路"锚点（否则凡调用它们的方法全被报）
-const GENERIC_CALLEES = new Set(['get', 'set', 'is', 'has', 'put', 'add', 'remove', 'getOrDefault', 'ofNullable', 'orElse', 'orElseGet', 'orElseThrow', 'map', 'filter', 'collect', 'stream', 'forEach', 'toString', 'equals', 'hashCode', 'valueOf', 'size', 'isEmpty', 'contains', 'indexOf', 'substring', 'length', 'format', 'join', 'split', 'findFirst', 'findAny', 'parse', 'build', 'create', 'newInstance', 'close', 'open', 'println', 'print', 'log', 'info', 'warn', 'error', 'debug', 'execute', 'apply', 'run', 'accept', 'compareTo', 'compare', 'ifPresent', 'of', 'values', 'value', 'name', 'list', 'array', 'iterator', 'next', 'hasNext', 'forEachRemaining', 'reduce', 'sorted', 'distinct', 'limit', 'skip', 'anyMatch', 'allMatch', 'noneMatch', 'orElseThrow', 'optional', 'requireNonNull', 'empty', 'getAndSet', 'computeIfAbsent', 'computeIfPresent']);
 
 // 读取文件内容：HEAD ref 用 git show HEAD:<path>（已提交的 hunk 行号指 HEAD），否则读工作区。
 // 走 argv 传参：文件名里的空格不会被 shell 拆开，恶意文件名也无法注入（review I1）。
@@ -1029,30 +1125,101 @@ function methodBodyRange(lines, decls, d) {
   return [d.line - 1, Math.max(d.line - 1, end)];
 }
 
-// 两个方法共享的下游调用列表（并行路径信号）
-function sharedCallees(lines, decls, a, b) {
-  const [as, ae] = methodBodyRange(lines, decls, a);
-  const [bs, be] = methodBodyRange(lines, decls, b);
-  const aSet = methodCallees(lines, as, ae);
-  const bSet = methodCallees(lines, bs, be);
-  const shared = [];
-  for (const c of aSet) if (bSet.has(c)) shared.push(c);
-  return shared;
+// ---- 改动点声明（机器可解析，design.md「现状与影响面」约定）----
+//
+// 语法与 test-plan 稳定行同源（`文件::符号`），spec 模板生成：
+//
+//   ### 改动点 1：<标题>
+//   - 目标：`src/pages/task/index.tsx::loadTaskList`
+//   - 并行路径：`src/pages/task/index.tsx::loadTaskListNew` → 随改
+//   - 并行路径：`src/pages/legacy.tsx::fetchAll` → 不随改（已废弃，无线上流量）
+//
+// 声明带文件归属，所以 gate 做的是**核对**不是**反推**：以前从全文正则抓裸方法名，
+// 必须靠一堆启发式猜"这个 backtick 是改动目标还是引用锚点"、跨文件同名只能放过。
+// 现在 (文件, 方法) 唯一确定，归属漂移与声称未落地都能精确判定。
+//
+// 「不随改」是显式豁免，取代了以前用 /无代码改动|不随改|复用|同构/ 扫正文的猜测。
+const DECL_RE = /^[-*]\s*(目标|并行路径)\s*[:：]\s*`([^`]+)`\s*(?:(?:→|->)\s*(随改|不随改)\s*(?:[（(]([^）)]*)[）)])?)?\s*$/;
+
+/**
+ * 解析「现状与影响面」里的改动点声明。
+ *
+ * 返回 { points, errors }。errors 非空 = 声明格式不合约定，调用方按 blocker 处理：
+ * 声明是 spec 阶段的产物契约，格式错了就是 spec 没写完，不是 gate 该猜的事。
+ */
+function parseChangePointDeclarations(designContent) {
+  const section = extractSection(designContent, '现状与影响面');
+  const points = [];
+  const errors = [];
+  if (!section) return { points, errors };
+
+  let current = null;
+  const flush = () => { if (current) points.push(current); current = null; };
+
+  for (const raw of section.split('\n')) {
+    const head = raw.match(/^###\s*改动点\s*(\d+)\s*[:：]?\s*(.*)$/);
+    if (head) {
+      flush();
+      current = { num: head[1], title: head[2].trim(), targets: [] };
+      continue;
+    }
+    if (!current) continue;
+
+    const line = raw.trim();
+    const m = line.match(DECL_RE);
+    if (!m) {
+      // 形似声明却解析不了：报错而不是静默忽略，否则漏一个目标就等于漏一次对账
+      if (/^[-*]\s*(目标|并行路径)\s*[:：]/.test(line)) {
+        errors.push(`改动点 ${current.num} 的声明无法解析：${line}——格式应为 \`- 目标：\`文件路径::方法名\`\` 或 \`- 并行路径：\`文件路径::方法名\` → 随改/不随改（理由）\``);
+      }
+      continue;
+    }
+
+    const [, kind, selector, follow, reason] = m;
+    const sep = selector.lastIndexOf('::');
+    if (sep <= 0 || sep + 2 >= selector.length) {
+      errors.push(`改动点 ${current.num} 的选择器缺少 \`::\` 文件/方法分隔：\`${selector}\`——必须写成 \`文件路径::方法名\`，只写方法名无法定位文件`);
+      continue;
+    }
+    if (kind === '并行路径' && !follow) {
+      errors.push(`改动点 ${current.num} 的并行路径 \`${selector}\` 未标注「随改」或「不随改」——并行路径必须逐条决定，不能悬空`);
+      continue;
+    }
+
+    current.targets.push({
+      kind,
+      file: selector.slice(0, sep),
+      method: selector.slice(sep + 2),
+      selector,
+      follow: kind === '目标' ? true : follow === '随改',
+      reason: (reason || '').trim(),
+    });
+  }
+  flush();
+
+  for (const p of points) {
+    if (p.targets.length === 0) {
+      errors.push(`改动点 ${p.num}（${p.title || '无标题'}）没有任何 \`- 目标：\` 声明——每个改动点必须声明至少一个 \`文件路径::方法名\``);
+    }
+  }
+  return { points, errors };
 }
 
-// 从 design.md 提取声称的方法名：backtick 标识符 + 裸标识符（/（ 跟随。
-// 归属/完整性方向用全文（含 ## 改动点 N / ## 补充确认）——宁漏勿误，避免"声称正确却报漂移"。
-function claimedMethodNames(designContent) {
-  const claimed = new Set();
-  for (const m of designContent.matchAll(/`([\w$.]+)`/g)) claimed.add(m[1]);
-  for (const m of designContent.matchAll(/([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*[（(]/g)) claimed.add(m[1]);
-  return claimed;
+/** 所有需要落地的声明（目标 + 随改的并行路径）。不随改的是显式豁免。 */
+function followedDeclarations(points) {
+  return points.flatMap((p) => p.targets.filter((t) => t.follow).map((t) => ({ ...t, num: p.num })));
 }
 
-function claimedMatches(claimed, name) {
-  if (claimed.has(name)) return true;
-  for (const c of claimed) if (c.endsWith('.' + name)) return true;
-  return false;
+/** (文件 → 该文件下所有被声明的方法名)，含不随改的——不随改也算"design 知道它"，不报归属漂移。 */
+function declaredByFile(points) {
+  const byFile = new Map();
+  for (const p of points) {
+    for (const t of p.targets) {
+      if (!byFile.has(t.file)) byFile.set(t.file, new Set());
+      byFile.get(t.file).add(t.method);
+    }
+  }
+  return byFile;
 }
 
 // 去掉并行路径后缀（New / Old / V2 / _new / _old）得前缀；无后缀返回 null
@@ -1062,39 +1229,22 @@ function stripParallelSuffix(name) {
   return m[1];
 }
 
-function isGenericCallee(name) {
-  if (GENERIC_CALLEES.has(name)) return true;
-  if (/^(get|set|is|has|list|find|put|add|remove|to|from|of)[A-Z]/.test(name)) return true; // getter/setter/收集器模式
-  if (/^(failure|success|ok|error|result|response|request)$/i.test(name)) return true;   // 响应包装
-  if (/^[A-Z]/.test(name)) return true; // 类名/构造器不是链路方法
-  return false;
-}
-
-// 改动点目标：design「现状与影响面」里 backtick 命名的标识符（spec 约定：改动点必须 backtick 命名目标方法）。
-// 与 claimed 不同：claimed 含裸标识符（/（跟随的链上 callee，用于归属/完整性比对）；这里只取 backtick，用于"声称未落地"反查。
-// 排除同时以（/（ 形式出现的引用方法（链上 callee 如 fillOtherInfo（1085 行）这类"被引用不是目标"）。
-function claimedTargetNames(designContent) {
-  const section = extractSection(designContent, '现状与影响面') || designContent;
-  const targets = new Set();
-  const refs = new Set();
-  for (const m of section.matchAll(/`([\w$.]+)`/g)) targets.add(m[1]);
-  for (const m of section.matchAll(/([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*[（(]/g)) refs.add(m[1]);
-  for (const r of refs) targets.delete(r);
-  return targets;
-}
-
-// 改动点归属 / 完整性对账：design 声称的方法 vs diff 实际落点，以及并行入口覆盖（共享下游链路）
-function checkChangePointOwnership(cwd, changeName, designContent, config) {
+// 改动点归属对账：声明的 (文件, 方法) vs diff 实际落点。三个方向：
+//   ① 归属漂移——hunk 落在该文件某个**未被声明**的方法里（插错方法）
+//   ② 声称未落地——声明了「随改」，但该文件有改动却没有 hunk 落进这个方法
+//   ③ 完整性——同文件里声明目标的并行兄弟方法（New/Old/V2 后缀）未被声明
+// ①② 现在是精确判定（声明带文件归属）；③ 仍是启发式发现，范围收窄到同文件兄弟。
+function checkChangePointOwnership(cwd, changeName, points, config) {
   const warnings = [];
-  const claimed = claimedMethodNames(designContent);
-  if (claimed.size === 0) return warnings; // design 未命名方法 → 空转（宁漏勿误）
+  if (!points.length) return warnings;
+
+  const followed = followedDeclarations(points);
+  const declared = declaredByFile(points);
 
   const cd = changeDir(cwd, changeName);
   const planContent = safeRead(path.join(cd, 'plan-ready.md'));
   const planPaths = planContent ? extractFilePaths(planContent) : [];
-  const changeSection = extractSection(designContent, '改动文件');
-  const designPaths = changeSection ? collectPaths(changeSection) : [];
-  const referenced = new Set([...designPaths, ...planPaths]);
+  const referenced = new Set([...declared.keys(), ...planPaths]);
 
   const hunks = diffHunks(cwd, config).filter((h) =>
     !isTestFilePath(h.file) && !isCrossRepoPath(cwd, h.file) && pathMatches([...referenced], h.file));
@@ -1115,134 +1265,77 @@ function checkChangePointOwnership(cwd, changeName, designContent, config) {
     return addedRangesByFile.get(file).some(([s, e]) => e >= s && line >= s && line <= e);
   }
 
-  // design 点名方法在**同文件**的直接下游调用：实现落在入口的私有下游属正常分工，不算漂移
-  const claimedDownstreamByFile = new Map();
-  function claimedDownstream(file) {
-    if (claimedDownstreamByFile.has(file)) return claimedDownstreamByFile.get(file);
+  // 声明目标在**同文件**的直接下游调用：实现落在入口的私有下游属正常分工，不算漂移
+  const downstreamByFile = new Map();
+  function declaredDownstream(file) {
+    if (downstreamByFile.has(file)) return downstreamByFile.get(file);
     const absPath = path.join(cwd, file);
     const content = safeRead(absPath);
     const set = new Set();
-    if (content) {
+    const names = declared.get(file);
+    if (content && names) {
       const codeLines = stripSourceComments(content).split('\n');
       const decls = declaredMethods(absPath);
       for (const m of decls) {
-        if (!claimedMatches(claimed, m.name)) continue;
+        if (!names.has(m.name)) continue;
         const [s, e] = methodBodyRange(codeLines, decls, m);
         for (const c of methodCallees(codeLines, s, e)) set.add(c);
       }
     }
-    claimedDownstreamByFile.set(file, set);
+    downstreamByFile.set(file, set);
     return set;
   }
 
-  // 归属漂移：diff hunk 实际所在方法是否在 design 声称集合内
+  // ① 归属漂移：按文件比对，不再跨文件靠方法名撞
   for (const h of hunks) {
+    const names = declared.get(h.file);
     for (const cm of containingMethods(path.join(cwd, h.file), h.file, h)) {
-      if (claimedMatches(claimed, cm.name)) continue;
+      if (names && names.has(cm.name)) continue;
       if (isAddedLine(h.file, cm.line)) continue;
-      if (claimedDownstream(h.file).has(cm.name)) continue;
-      warnings.push(`改动点归属：design 声称改动未包含方法 ${cm.name}（${h.file}:${cm.line}），但 diff 落点在此方法内（第 ${h.newStart} 行）——方法归属漂移，人工核对是否插错方法`);
+      if (declaredDownstream(h.file).has(cm.name)) continue;
+      warnings.push(`改动点归属：${h.file} 的 ${cm.name}（第 ${cm.line} 行）未被任何改动点声明，但 diff 落点在此方法内（第 ${h.newStart} 行）——方法归属漂移，人工核对是否插错方法`);
     }
   }
 
-  // design 显式标注"无代码改动 / 不随改 / 保持基线"的目标：声称未落地反查跳过（显式豁免）
-  const exemptTargets = new Set();
-  for (const line of designContent.split('\n')) {
-    if (!/无代码改动|不随改|无需改动|不改动|保持(?:master|基线|原)/.test(line)) continue;
-    for (const m of line.matchAll(/`([\w$.]+)`/g)) exemptTargets.add(m[1].split('.').pop());
-  }
-  // 只在"既有代码引用"语境出现的标识符不算"声称要改"：同一标识符的每处 backtick 都带
-  // [Verified]/复用/同构/沿用/既有 等标记时跳过反查（宁漏勿误——引用锚点不是改动目标）
-  const mentionSeen = new Set();
-  const mentionAsTarget = new Set();
-  for (const line of designContent.split('\n')) {
-    const referenceOnly = /\[Verified|复用|同构|沿用|既有|现有|实际签名/.test(line);
-    for (const m of line.matchAll(/`([\w$.]+)`/g)) {
-      const name = m[1].split('.').pop();
-      mentionSeen.add(name);
-      if (!referenceOnly) mentionAsTarget.add(name);
+  // ② 声称未落地：声明「随改」但该方法体内没有任何 hunk
+  for (const t of followed) {
+    const fileHunks = hunksByFile.get(t.file);
+    if (!fileHunks || !fileHunks.length) {
+      warnings.push(`声称未落地：改动点 ${t.num} 声明改 \`${t.selector}\`，但 ${t.file} 在本次变更中没有任何改动——未实现，或文件路径写错`);
+      continue;
+    }
+    const absPath = path.join(cwd, t.file);
+    const decls = declaredMethods(absPath);
+    const target = decls.find((d) => d.name === t.method);
+    if (!target) {
+      warnings.push(`声称未落地：改动点 ${t.num} 声明的 \`${t.selector}\` 在 ${t.file} 里找不到该方法声明——方法名写错，或已被重命名/删除`);
+      continue;
+    }
+    // 大 hunk（一次新增几百行）会覆盖多个方法：按行区间重叠判定落点
+    const end = target.bodyEnd || target.line;
+    const landed = fileHunks.some((h) =>
+      h.newStart <= end && h.newStart + Math.max(1, h.newCount) - 1 >= target.line);
+    if (!landed) {
+      warnings.push(`声称未落地：改动点 ${t.num} 声明改 \`${t.selector}\`（${t.file}:${target.line}），但该文件有改动却没有任何落点在这个方法里——改动落在了别的方法，或该点未实现`);
     }
   }
-  for (const n of mentionSeen) if (!mentionAsTarget.has(n)) exemptTargets.add(n);
 
-  // 声称未落地：design backtick 声称的改动目标方法，若其文件有改动却无 hunk 落进它 → 未实现或已在上游提交（反方向兜底）
-  const claimedTargets = claimedTargetNames(designContent);
-  const landedNamesGlobal = new Set();
-  const claimedTargetFiles = [];
-  for (const [file, fileHunks] of hunksByFile) {
+  // ③ 完整性：同文件里声明目标的并行兄弟方法（New/Old/V2 后缀）未被声明
+  for (const [file, names] of declared) {
+    if (!hunksByFile.has(file)) continue;
     const absPath = path.join(cwd, file);
     const decls = declaredMethods(absPath);
-    const landed = new Set();
-    for (const h of fileHunks) {
-      for (const cm of containingMethods(absPath, file, h)) landed.add(cm.name);
-    }
-    // 大 hunk（例如一次新增几百行）会覆盖多个方法：按行区间重叠判定"落点覆盖"，
-    // 否则只有 hunk 起点的那个方法算落地，其余被误报"声称未落地"
-    const landedByRange = new Set();
     for (const d of decls) {
-      const end = d.bodyEnd || d.line;
-      if (fileHunks.some((h) => h.newStart <= end && h.newStart + Math.max(1, h.newCount) - 1 >= d.line)) {
-        landedByRange.add(d.name);
-      }
-    }
-    claimedTargetFiles.push({ file, decls, landed, landedByRange });
-    for (const n of landed) landedNamesGlobal.add(n);
-    for (const n of landedByRange) landedNamesGlobal.add(n);
-  }
-  for (const { file, decls, landed, landedByRange } of claimedTargetFiles) {
-    for (const d of decls) {
-      if (!claimedTargets.has(d.name)) continue;
-      if (exemptTargets.has(d.name)) continue;
-      if (landed.has(d.name) || landedByRange.has(d.name)) continue;
-      // 同名方法已在别的改动文件落地 → design 的目标已兑现；跨文件同名不再逐处反查（宁漏勿误）
-      if (landedNamesGlobal.has(d.name)) continue;
-      warnings.push(`声称未落地：design 声称改 ${d.name}（${file}:${d.line}），但该文件有改动却没有任何落点在它里面——改动点未实现或已在上游提交，人工核对`);
-    }
-  }
-
-  // 完整性：未覆盖的并行入口
-  // ① 命名不限——未被 design 覆盖的方法，若调用"改动链路"下游方法（design 点名 + 同文件声称目标实际调用 + 非通用方法）就报；
-  // ② 兜底——同前缀兄弟方法（带 New/Old/V2 后缀）与设计覆盖的方法共享下游调用（design 未点名链路时仍有网）
-  for (const [file, fileHunks] of hunksByFile) {
-    const absPath = path.join(cwd, file);
-    const decls = declaredMethods(absPath);
-    const rawContent = safeRead(absPath);
-    const lines = rawContent ? stripSourceComments(rawContent).split('\n') : [];
-    const declNames = new Set(decls.map((d) => d.name));
-    // 有效锚点：design 声称的目标方法实际调用的下游方法（同文件）——这才是改动链路
-    const chainCallees = new Set();
-    for (const m of decls) {
-      if (!claimedMatches(claimed, m.name)) continue;
-      const [ms, me] = methodBodyRange(lines, decls, m);
-      for (const c of methodCallees(lines, ms, me)) {
-        // 锚点必须是本文件真实声明的方法：Math.max/stopActivity 这类库/外部调用不构成"改动链路"
-        if (declNames.has(c) && !isGenericCallee(c)) chainCallees.add(c);
-      }
-    }
-    for (const d of decls) {
-      if (claimedMatches(claimed, d.name)) continue; // design 已覆盖
-    const [ds, de] = methodBodyRange(lines, decls, d);
-      const dCallees = methodCallees(lines, ds, de);
-      const chainCallee = [...dCallees].find((c) =>
-        claimedMatches(claimed, c) && chainCallees.has(c));
-      if (chainCallee) {
-        warnings.push(`改动点完整性：${file} 的 ${d.name} 调用设计点名的下游方法 ${chainCallee}（与改动点同链路），但 design 未覆盖 ${d.name}——确认该并行入口是否也需改`);
-        continue;
-      }
-      // 兜底：与某个被 design 覆盖的方法同前缀（New/Old/V2 后缀）且共享下游调用
-      for (const m of decls) {
-        if (m.line === d.line) continue;
-        if (!claimedMatches(claimed, m.name)) continue;
-        const prefixM = stripParallelSuffix(m.name);
+      if (names.has(d.name)) continue; // 已声明（含不随改的显式豁免）
+      for (const declaredName of names) {
+        const prefixDeclared = stripParallelSuffix(declaredName);
         const prefixD = stripParallelSuffix(d.name);
-        const isSibling = (prefixM !== null && prefixM === d.name)
-          || (prefixD !== null && prefixD === m.name)
-          || (prefixD !== null && prefixM !== null && prefixD === prefixM);
+        const isSibling = (prefixDeclared !== null && prefixDeclared === d.name)
+          || (prefixD !== null && prefixD === declaredName)
+          || (prefixD !== null && prefixDeclared !== null && prefixD === prefixDeclared);
         if (!isSibling) continue;
-        if (sharedCallees(lines, decls, m, d).length) {
-          warnings.push(`改动点完整性：${file} 的 ${d.name} 与 ${m.name} 是并行路径且共享下游调用，design 声称改 ${m.name} 却未覆盖 ${d.name}——确认是否也需改`);
-          break;
-        }
+        warnings.push(`改动点完整性：${file} 的 ${d.name} 与已声明的 ${declaredName} 是并行路径（同前缀兄弟方法），但没有任何改动点声明它——确认是「随改」还是「不随改」并写进 design`);
+        break;
       }
     }
   }
@@ -1251,140 +1344,72 @@ function checkChangePointOwnership(cwd, changeName, designContent, config) {
 }
 
 // ---- 改动点逐条机械判定 ----
-// 把 design 每个「改动点」变成机器可核验的行：声称的目标方法 vs 改动关键词的实际落点。
-// 关键词 = 改动点文本里、非声明方法、非通用、且在主文件中罕见的标识符（改动特有，如字段/表名）。
-// 判定：声称目标方法的方法体含关键词 → ✅；不含 → ⚠️（并给出关键词实际落点方法）。
-// 局限：只判定"目标方法体是否含改动特有标识"；中文关键词（\w 不含）检测不到 → 宁漏勿误。
+// 把每个改动点的声明变成机器可核验的行：声明的 `文件::方法` vs diff 实际落点。
+// 判定依据是**行区间重叠**——声明目标的方法体内有 hunk = ✅，没有 = ⚠️（并给出实际落点方法）。
+//
+// 以前没有文件归属，只能从改动点正文抽「罕见标识符」当关键词、再嗅探哪个方法体里出现过它，
+// 既要 stopword 表又要词频过滤，还会把同名方法认到别的文件去。声明式让这一整套启发式消失。
 
-const KEYWORD_STOPWORDS = new Set(['ext', 'task', 'dto', 'list', 'map', 'id', 'ids', 'value', 'values', 'status', 'time', 'data', 'info', 'result', 'param', 'config', 'cfg', 'key', 'name', 'type', 'code', 'msg', 'message', 'json', 'entity', 'record', 'log', 'logger', 'method', 'class', 'array', 'object', 'string', 'number', 'bool', 'set', 'get', 'theOne', 'dtoList', 'listDtos', 'utils', 'util', 'impl', 'service', 'manager', 'dao', 'mapper']);
-
-function parseChangePointSections(designContent) {
-  const section = extractSection(designContent, '现状与影响面');
-  if (!section) return [];
-  const points = [];
-  let current = null;
-  for (const line of section.split('\n')) {
-    const m = line.match(/^###\s*改动点\s*(\d+)[:：]?\s*(.*)$/);
-    if (m) {
-      if (current) points.push(current);
-      current = { num: m[1], title: m[2].trim(), body: [] };
-    } else if (current) {
-      current.body.push(line);
-    }
-  }
-  if (current) points.push(current);
-  return points;
-}
-
-function changePointVerdicts(cwd, changeName, designContent) {
+function changePointVerdicts(cwd, changeName, points, config) {
   const verdicts = [];
-  const points = parseChangePointSections(designContent);
   if (!points.length) return verdicts;
 
   const cd = changeDir(cwd, changeName);
   const planContent = safeRead(path.join(cd, 'plan-ready.md'));
   const planPaths = planContent ? extractFilePaths(planContent) : [];
-  const changeSection = extractSection(designContent, '改动文件');
-  const designPaths = changeSection ? collectPaths(changeSection) : [];
-  const referenced = [...new Set([...designPaths, ...planPaths])];
+  const declared = declaredByFile(points);
+  const referenced = new Set([...declared.keys(), ...planPaths]);
 
-  // 每个文件的改动新增行文本（--unified=0 的 hunk 新增行；HEAD ref 用 HEAD 内容）
-  const addedTextByFile = new Map();
-  for (const h of diffHunks(cwd, loadGateConfig(cwd))) {
-    if (isTestFilePath(h.file) || isCrossRepoPath(cwd, h.file) || !pathMatches(referenced, h.file)) continue;
-    const abs = path.join(cwd, h.file);
-    const content = fileContentAt(abs, h.file, h.ref);
-    if (!content) continue;
-    const lines = content.split('\n');
-    const start = h.newStart - 1;
-    const end = Math.min(lines.length, start + Math.max(1, h.newCount));
-    let buf = addedTextByFile.get(h.file) || '';
-    for (let i = start; i < end; i++) buf += lines[i] + '\n';
-    addedTextByFile.set(h.file, buf);
+  const hunksByFile = new Map();
+  for (const h of diffHunks(cwd, config)) {
+    if (isTestFilePath(h.file) || isCrossRepoPath(cwd, h.file) || !pathMatches([...referenced], h.file)) continue;
+    if (!hunksByFile.has(h.file)) hunksByFile.set(h.file, []);
+    hunksByFile.get(h.file).push(h);
   }
 
-  // 有改动新增行的文件列表（每个改动点按含其目标方法的文件单独判定）
-  const filesWithAdded = [];
-  for (const [rel, added] of addedTextByFile) {
-    if (!added) continue;
-    const abs = path.join(cwd, rel);
-    const content = safeRead(abs);
-    if (!content) continue;
-    const decls = declaredMethods(abs);
-    if (!decls.length) continue;
-    const byName = new Map();
-    for (const d of decls) if (!byName.has(d.name)) byName.set(d.name, d);
-    filesWithAdded.push({ rel, lines: content.split('\n'), decls, byName, added });
+  const declsCache = new Map();
+  function declsOf(file) {
+    if (!declsCache.has(file)) declsCache.set(file, declaredMethods(path.join(cwd, file)));
+    return declsCache.get(file);
   }
-  if (!filesWithAdded.length) return verdicts;
+  function overlaps(fileHunks, decl) {
+    const end = decl.bodyEnd || decl.line;
+    return fileHunks.some((h) => h.newStart <= end && h.newStart + Math.max(1, h.newCount) - 1 >= decl.line);
+  }
 
   for (const p of points) {
-    const text = `${p.title}\n${p.body.join('\n')}`;
-    const backtickIds = [...text.matchAll(/`([\w$.]+)`/g)].map((m) => m[1]);
-    const parenSet = new Set(
-      [...text.matchAll(/([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*[（(]/g)].map((m) => m[1].split('.').pop()));
-    // 声称目标：backtick 声明方法，且非（/（ 跟随的引用；每个目标在自己所在文件里判定
-    const rawTargets = [...new Set(backtickIds)].filter((x) => !parenSet.has(x));
-    if (!rawTargets.length) continue;
-
     const details = [];
-    let allHit = true;
-    for (const t of rawTargets) {
-      // 找到含该目标方法的文件
-      const f = filesWithAdded.find((x) => x.byName.has(t));
-      if (!f) continue; // 目标不在改动文件 → 跳过
-      const allDeclNames = new Set(f.decls.map((d) => d.name));
-      // 该文件视角的关键词：section 标识符 + 本文件改动新增行 + 罕见
-      const tokens = new Set([
-        ...backtickIds,
-        ...parenSet,
-        ...[...text.matchAll(/([A-Za-z_$][\w$]*)/g)].map((m) => m[1]),
-      ]);
-      const keywords = [];
-      for (const id of tokens) {
-        if (id.length < 3) continue;
-        if (KEYWORD_STOPWORDS.has(id) || isGenericCallee(id)) continue;
-        if (allDeclNames.has(id)) continue;
-        if (!f.added.includes(id)) continue; // 必须在本文件改动新增行里
-        let count = 0;
-        for (const d of f.decls) {
-          const [s, e] = methodBodyRange(f.lines, f.decls, d);
-          for (let i = s; i <= e; i++) {
-            if (f.lines[i].includes(id)) { count++; break; }
-          }
-        }
-        if (count >= 1 && count <= 2) keywords.push(id);
+    for (const t of p.targets) {
+      // 不随改是显式决定，不参与落地判定；理由留给人工核对
+      if (!t.follow) {
+        details.push({ target: t.selector, hit: true, actual: null, note: `不随改：${t.reason || '未写理由'}` });
+        continue;
       }
-      if (!keywords.length) continue; // 该文件无法判定 → 跳过目标
-      const tDecl = f.byName.get(t);
-      let hit = false;
+      const fileHunks = hunksByFile.get(t.file) || [];
+      const decls = declsOf(t.file);
+      const decl = decls.find((d) => d.name === t.method);
+      if (!decl) {
+        details.push({ target: t.selector, hit: false, actual: null, note: '该文件里找不到此方法声明' });
+        continue;
+      }
+      if (overlaps(fileHunks, decl)) {
+        details.push({ target: t.selector, hit: true, actual: `${t.method}@${decl.line}` });
+        continue;
+      }
+      // 没落在声明目标里 → 报出实际落在了哪个方法，这正是「改 A 结果改了 ANew」的信号
       let actual = null;
-      if (tDecl) {
-        const [s, e] = methodBodyRange(f.lines, f.decls, tDecl);
-        for (let i = s; i <= e; i++) {
-          if (keywords.some((k) => f.lines[i].includes(k))) { hit = true; break; }
-        }
+      for (const d of decls) {
+        if (overlaps(fileHunks, d)) { actual = `${d.name}@${d.line}`; break; }
       }
-      if (!hit) {
-        for (const d of f.decls) {
-          const [ds, de] = methodBodyRange(f.lines, f.decls, d);
-          for (let i = ds; i <= de; i++) {
-            const kw = keywords.find((k) => f.lines[i].includes(k));
-            if (kw) { actual = `${d.name}@${i + 1}`; break; }
-          }
-          if (actual) break;
-        }
-        allHit = false;
-      }
-      details.push({ target: t, hit, actual });
+      details.push({ target: t.selector, hit: false, actual });
     }
     if (!details.length) continue;
     verdicts.push({
       point: `改动点 ${p.num}`,
       title: p.title,
-      claimed: details.map((d) => d.target),
+      claimed: p.targets.map((t) => t.selector),
       details,
-      verdict: allHit ? '✅' : '⚠️',
+      verdict: details.every((d) => d.hit) ? '✅' : '⚠️',
     });
   }
   return verdicts;

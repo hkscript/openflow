@@ -59,13 +59,33 @@ spec 是非 build 阶段，`phase` 不带 `mode`/`task`。若 `.openflow/phase` 
    - **下游/消费方**：结果流向哪里、谁消费（trace_path outbound / data_flow / cross_service，含跨服务/跨仓库）
    - **链路末端**：存储键/提交状态/通知/下游服务的**粒度与状态隔离性**——重点核对链路末端与改动点粒度是否一致（例如进页从整批改单任务，链路末端的 localStorage key 粒度是否跟着改）
    - **10 类 checklist 逐类排查**：查询/数据加载粒度、本地状态/缓存键、状态隔离/并发、数据流/副作用、接口契约、数据结构/存储格式、依赖/调用方、性能/资源、错误/边界处理、兼容/迁移
-   - **并行路径排查（必做）**：对每个改动点所在方法，检查同文件/同业务是否有**同前缀并行实现**（带 `New`/`Old`/`V2` 等后缀的兄弟方法）；也要排查**命名不同但逻辑对等**的并行路径（如新老两套实现）——共享同一下游链路（提交/存储/通知）的并行路径必须逐一决定"随改"或"明确废弃不随改"并写进改动点；**每个改动点必须用 backtick 命名目标方法**，供 verify 闸门做改动点归属对账
+   - **并行路径排查（必做）**：对每个改动点所在方法，检查同文件/同业务是否有**同前缀并行实现**（带 `New`/`Old`/`V2` 等后缀的兄弟方法）；也要排查**命名不同但逻辑对等**的并行路径（如新老两套实现）——共享同一下游链路（提交/存储/通知）的并行路径必须逐一决定「随改」或「不随改」并**写成声明行**
    - 结果写入 design.md 的「现状与影响面」章节，每条带 `[Verified]` 证据
 
 做完以上检查后再进入第 3 步生成 OpenSpec 文件。
 
 **design.md 必填章节**：生成 design.md 时**必须**包含：
-- `## 现状与影响面` 章节（改动点、生产链路影响表、10 类分类排查表）——缺失即视为设计未完成，close 闸门（check-design-consistency）会阻塞；改动点需用 backtick 命名目标方法（`` `方法名` ``）、并覆盖并行路径（同前缀带 `New`/`Old`/`V2` 后缀的兄弟方法，以及命名不同但逻辑对等的新老实现）
+
+- `## 现状与影响面` 章节（改动点、生产链路影响表、10 类分类排查表）——缺失即视为设计未完成，`check-design-consistency` 会阻塞。
+
+  **每个改动点必须写成 `### 改动点 N` 小节，并给出机器可解析的声明行**（语法与 test-plan 稳定行同源：`` `文件路径::方法名` ``）：
+
+  ```markdown
+  ### 改动点 1：进页加载粒度从整批改为单任务
+  - 目标：`src/pages/task/index.tsx::loadTaskList`
+  - 并行路径：`src/pages/task/index.tsx::loadTaskListNew` → 随改
+  - 并行路径：`src/pages/legacy.tsx::fetchAll` → 不随改（已废弃，无线上流量）
+
+  上下文说明、影响表、证据照常写在声明行下面，不受格式约束。
+  ```
+
+  格式硬约束（违反即 blocker，不是 warning）：
+  - **选择器必须含 `::`**，只写方法名不行——gate 要靠文件归属做精确对账，没有文件就只能猜
+  - **每个改动点至少一条 `- 目标：`**
+  - **每条 `- 并行路径：` 必须标注 `→ 随改` 或 `→ 不随改（理由）`**，不能悬空；`不随改` 是**显式豁免**，gate 据此跳过落地检查
+  - 声明的方法名必须能在该文件里 grep 到（未读不用铁律）
+
+  为什么必须声明到文件：gate 用它做三件事——归属漂移（改动落进未声明的方法）、声称未落地（声明了却没改）、完整性（同文件并行兄弟方法没声明）。前两项现在是**精确判定**；声明缺失时 gate 不会去猜，直接阻塞。
 - `## 改动文件` 章节：列出本变更**实际改动**的文件路径（完整路径，带 `[Verified]` 证据）。**不要把现状影响面里 `[Verified]` 标注的既有代码引用写进这一节**——gate 只从「改动文件」节提取做一致性对账，现状影响面里的引用若混入会被误当改动文件。跨仓库路径照常列出（gate 会跳过跨仓库断言，但保留在文档里供人工核对）。
 
 **确定性检查（必做，进入步骤 3 之前）：** 汇总所有 `[Assumption]` 和 `[Unknown]` 标签的条目，逐条消解或标记。对于 design.md 中将引用的任何文件路径/模块名/函数名，必须确认其存在（未读不用铁律）。
@@ -77,16 +97,10 @@ spec 是非 build 阶段，`phase` 不带 `mode`/`task`。若 `.openflow/phase` 
 gate helper 路径定位见主 SKILL.md「状态检测 → Helpers 定位」（与 SKILL.md 同一 `<base>`）：
 
 ```bash
-# 方式 1：脚本校验（推荐）
 node <base>/.claude/hooks/openflow-gate.mjs check-proposal <变更名>
-
-# 方式 2：手动 grep（脚本不可用时）
-grep -q '^## Why' openspec/changes/<变更名>/proposal.md && echo "✅ Why 存在" || echo "❌ 缺少 ## Why"
-grep -q '^## What Changes' openspec/changes/<变更名>/proposal.md && echo "✅ What Changes 存在" || echo "❌ 缺少 ## What Changes"
-grep -q '^## Impact' openspec/changes/<变更名>/proposal.md && echo "✅ Impact 存在" || echo "⚠️ 建议补充 ## Impact"
 ```
 
-脚本输出 JSON，`pass` 字段直接指示是否通过。
+脚本输出 JSON，`pass` 字段直接指示是否通过。脚本缺失或报错 → 停止并要求重装（见主 SKILL.md「客户端支持」），不要改用手动 grep 凑合。
 
 如果 `## Why` 或 `## What Changes` 缺失，**必须先修复 proposal.md 再继续**：
 - 中文标题映射：`## 问题描述` / `## 背景` → `## Why`；`## 改动点` / `## 方案` → `## What Changes`
@@ -153,8 +167,9 @@ openspec validate <变更名> --strict
 2. 每个用例必须给出**确定性选择器**：`<测试文件>::<测试函数名>`（如 `tests/auth/test_login.py::test_login_with_valid_credentials`）；函数名从 scenario 标题派生（snake_case）
 3. 测试内容从 scenario 描述推导（给定条件 → test setup，期望结果 → assertion）
 4. 测试文件路径根据项目约定自动推断（见下方）
-5. 初始状态：稳定行**不带状态后缀**（= 未开始）；build 阶段逐行在行尾追加状态后缀
-6. **选择器必须能被 enforcement 识别**：常见声明形式（Jest `test('…')`/`it('…')`/`describe('…')`、Python `def test_…():`、Go `func Test…()`、Rust `#[test] fn test_…()`、JUnit `@Test` 方法）直接可用。**不支持的声明形式改用 marker 区域选择器**：`<测试文件>::@openflow(T-001)`，并在测试文件对应测试体内放置 `@openflow(T-001)` 标记——否则 task-build 会因无法定位选择器区域而 fail-closed
+5. 初始状态：稳定行**不带状态后缀**（= 未开始）；build 阶段逐行在行尾追加状态后缀（先 `🔴 RED`，后 `✅ PASS`）
+6. **给状态机/守卫类改动补不变量行 `INV-00x`**（见下方「不变量行」）——只要本次改动引入或修改了**多条件守卫**（`if (!a && !b)`）或**枚举状态分支**，就必须至少写一条
+7. **选择器必须能被 enforcement 识别**：常见声明形式（Jest `test('…')`/`it('…')`/`describe('…')`、Python `def test_…():`、Go `func Test…()`、Rust `#[test] fn test_…()`、JUnit `@Test` 方法）直接可用。**不支持的声明形式改用 marker 区域选择器**：`<测试文件>::@openflow(T-001)`，并在测试文件对应测试体内放置 `@openflow(T-001)` 标记——否则 task-build 会因无法定位选择器区域而 fail-closed
 
 `openspec/changes/<变更名>/test-plan.md` 格式（**稳定行是唯一事实来源**，enforcement / Gate / detect 都逐行解析它；不要靠额外的表格当事实来源）：
 
@@ -167,7 +182,7 @@ openspec validate <变更名> --strict
   机器格式（enforcement / Gate / detect 逐行解析，必须保持）：
   每行 = 一个测试用例，`<ID>: `<测试文件>::<测试函数名>``
   ID 用稳定 T-00x；选择器必须能 grep 到真实测试函数。
-  状态后缀可选的（行尾追加）：✅ PASS / ⬜ TODO / ❌ FAIL；build 逐任务更新。
+  状态后缀可选的（行尾追加）：🔴 RED（见过它失败）/ ✅ PASS / ⬜ TODO / ❌ FAIL；build 逐任务更新。
   不要给这些行加列表符号/表格管道，不要拆成多行。
 -->
 
@@ -179,10 +194,23 @@ T-003: `tests/auth/test_session.py::test_token_expiry_triggers_refresh`
 build 完成后示例（状态后缀在行尾，选择器不受影响）：
 
 ```markdown
-T-001: `tests/auth/test_login.py::test_login_with_valid_credentials` ✅ PASS
+T-001: `tests/auth/test_login.py::test_login_with_valid_credentials` 🔴 RED ✅ PASS
 T-002: `tests/auth/test_login.py::test_login_with_wrong_password` ⬜ TODO
-T-003: `tests/auth/test_session.py::test_token_expiry_triggers_refresh` ❌ FAIL
+T-003: `tests/auth/test_session.py::test_token_expiry_triggers_refresh` 🔴 RED ❌ FAIL
 ```
+
+**`🔴 RED` 是硬要求**：`✅ PASS` 行必须同时带 `🔴 RED`，否则 `check-test-plan` / `check-build-done` 直接判失败（`red_evidence_missing`）。理由见 build 模板 Step 2——**没见过红的测试不证明任何事**：只钉负空间的断言（`verify(..., never())`、`assertNull`、"不抛异常"）在实现存在之前就是绿的，一个什么都不做的回归照样满足它。RED 是这条断言"具备失败能力"的唯一机器凭据。
+
+**不变量行 `INV-00x`（跨场景正向不变量）：**
+
+```markdown
+INV-001: `tests/price/test_apply_today.py::test_always_has_observable_effect` covers T-003, T-004, T-007
+```
+
+- 语法与稳定行同源，只是 ID 前缀为 `INV-`，并**必须**带 `covers T-00x, …` 子句列出它横跨的场景行；covers 指向不存在的 ID = blocker
+- 它和 T 行同权：要被某个 plan-ready task 的 `Test cases:` 引用、要有 `🔴 RED` 才能标 `✅ PASS`、选择器同样唯一归属
+- **什么时候必须写**：改动引入/修改了多条件守卫或枚举状态分支时。一条不变量的形状是「对**任意**(维度 A × 维度 B × …) 组合，只要前提成立，就**必须**产生可观测副作用（除非命中显式白名单）」——正向、全称、可失败
+- 为什么需要它：`1 scenario = 1 test` 的映射天然只覆盖被写下来的那几格，谁也没义务枚举组合；而组合空白格正是守卫回归藏身的地方。不变量行是唯一能一条覆盖整张矩阵的东西，所以它必须在 test-plan 里有自己的位置，而不是挂在某个 T 行下面
 
 **追溯表（可选，仅供人工阅读/verify 场景覆盖率对账，不是解析来源）：**
 
@@ -264,110 +292,21 @@ T-003: `tests/auth/test_session.py::test_token_expiry_triggers_refresh` ❌ FAIL
 
 **这是 spec 阶段最关键的关口。步骤 2 已经理解了架构，这一步要深度验证生成的文档与实际代码逻辑是否完全匹配。**
 
-**态度要求**：
-- **慢下来**——不要快速扫过，逐行比对 spec 描述与代码实现
-- **怀疑一切**——假设每个方法都可能有 bug，直到你用 grep/Read 证明它正确
-- **推演边界**——正常路径容易对，边界值（0、null、跨天、并发）才是 bug 藏身之处
-- **记录证据**——每个结论都要有 grep/Read 的输出作为证据，不能凭印象
+**必须先完整读取 `references/code-verification.md`（与本文件同目录），按其中 6 节逐项核对：**
 
-#### 7.1 逻辑正确性深度验证
+| 节 | 核对什么 |
+|----|----------|
+| 逻辑正确性 | 方法行为、参数传递、计算逻辑、状态转换、返回值与 spec 是否一致 |
+| 调用关系 | 所有调用方、隐藏调用（反射/注入）、完整调用链 |
+| 边界条件 | 时间/数值/空值/并发/类型边界，必须手写推演表 |
+| 状态叉乘矩阵 | 多条件守卫/枚举状态/灰度开关的**组合**展开，每格填覆盖它的 T-id 或空白理由（有守卫改动时必做） |
+| 完整性与一致性 | proposal↔specs↔test-plan↔plan-ready 逐层覆盖 |
+| 依赖注入 | 依赖是否已注入、注入方式是否符合项目约定 |
 
-**必须读取实际代码，逐方法验证 spec 中描述的逻辑是否正确。**
+该文件不存在 → 安装损坏，停止并要求重装（见主 SKILL.md「客户端支持」），不要凭记忆核对。
 
-| 检查项 | 方法 | 示例 |
-|--------|------|------|
-| 方法行为与 spec 一致 | 读取方法实现，逐行对比 spec 的 WHEN/THEN | spec 说"targetHour=10 时删除窗口为 10:00-11:00"，代码是否真的用 targetHour 计算？ |
-| 参数传递正确 | 追踪参数从调用方到被调用方的完整链路 | 调用方传的是 currentHour 还是 targetHour？中间有没有被覆盖？ |
-| 计算逻辑正确 | 手动推演边界值，写下来对比 | getCurrentHourStartSeconds() 在 9:50 运行时返回几点？ |
-| 状态转换正确 | 检查状态机或条件分支的每个出口 | 从状态 A 到状态 B 的条件是否完整？有没有遗漏的 else？ |
-| 返回值正确 | 检查每个 return 语句 | 返回的是新值还是旧值？单位是秒还是毫秒？ |
 
-**必须执行的验证步骤：**
-
-```bash
-# 1. 读取要修改的方法完整实现（不要只看签名）
-grep -n "methodName" path/to/file.java -A 30
-
-# 2. 追踪参数来源——从调用方一路追到被调用方
-grep -rn "methodName" src/ --include="*.java" -B 5
-
-# 3. 对于时间/数值相关逻辑，手动推演边界值并记录
-# 例如：9:50 运行，targetHour=10
-# getCurrentHourStartSeconds() → Calendar.getInstance() → 9:00 ❌ 错误！
-# getTargetHourStartSeconds(10) → 10:00 ✅ 正确
-```
-
-#### 7.2 调用关系深度验证
-
-| 检查项 | 方法 | 判定标准 |
-|--------|------|----------|
-| 方法被谁调用 | `grep -rn "methodName" src/` | 列出**所有**调用方，不能遗漏 |
-| 调用方是否安全 | 读取每个调用方的上下文（前后 10 行） | 不会因为改动导致其他调用方出问题 |
-| 是否有隐藏调用 | 检查反射、动态调用、接口实现、Spring 注入 | 不能遗漏 |
-| 调用链路完整 | 追踪 A→B→C 的完整调用链 | 中间环节有没有转换参数？ |
-
-**输出格式：**
-
-```markdown
-#### 调用关系分析
-
-`checkSend(ResTaskSceneEntity)` 调用方：
-- ResTaskSendVersion4Scheduler.process() ✅ 唯一调用方
-  - 上下文：在 for 循环中调用，传入 scene 对象
-  - 改动影响：仅影响该调度器，安全
-
-`triggerWithNow` 执行条件：
-- 仅在"所有场景"分支执行 ✅
-- 手动指定 confId/sceneId 时不触发 ✅
-- 验证方式：grep "triggerWithNow" 确认只有 1 处调用
-```
-
-#### 7.3 边界条件深度验证
-
-| 检查项 | 方法 | 示例 |
-|--------|------|------|
-| 时间边界 | 手动推演 23:59、00:00、跨天、跨月、闰年 | 23:50 运行 targetHour=0 时行为正确？ |
-| 数值边界 | 检查 < vs <=、> vs >=、溢出 | targetHour >= beginHour && targetHour < endHour（左闭右开） |
-| 空值/缺失 | 检查 null/undefined/空集合处理 | 配置不存在时是否有默认值？会不会 NPE？ |
-| 并发边界 | 检查锁、竞态条件、幂等性 | 两个实例同时运行会怎样？会不会重复处理？ |
-| 类型边界 | 检查类型转换、精度丢失 | long 转 int 会不会溢出？浮点数比较用 ==？ |
-
-**边界条件推演表（必须手写，不能跳过）：**
-
-```markdown
-| 场景 | 输入 | 预期行为 | 代码实际行为 | 验证方式 | 匹配 |
-|------|------|----------|-------------|----------|------|
-| 正常时间 | 9:50, targetHour=10 | 窗口 10:00-11:00 | getTargetHourStartSeconds(10) → 10:00 | grep + 推演 | ✅ |
-| 跨天 | 23:50, targetHour=0 | 窗口 0:00-1:00 | getTargetHourStartSeconds(0) → 0:00 | grep + 推演 | ✅ |
-| 边界包含 | 10:00:00 | 包含在窗口内 | >= start && < end | 读代码确认 | ✅ |
-| 边界排除 | 11:00:00 | 不包含在窗口内 | >= start && < end | 读代码确认 | ✅ |
-| 空配置 | 配置不存在 | 不抛异常 | 检查 null 处理 | grep "null" | ✅ |
-```
-
-#### 7.4 完整性与一致性验证
-
-| 检查项 | 方法 | 判定标准 |
-|--------|------|----------|
-| proposal 需求覆盖 | 逐条对比 proposal.md 的"变更内容"与 specs/ | 每条变更都有对应 requirement |
-| requirement 有 scenario | 检查 specs/ 中每个 requirement | 每个都有 `#### Scenario:` |
-| scenario 可测试 | 检查每个 scenario 是否有明确的 WHEN/THEN | 不能模糊描述 |
-| test-plan 覆盖 | 对比 specs/ 中的 scenario 与 test-plan.md | 每个 scenario 都有对应测试行 |
-| plan-ready 覆盖 | 对比 test-plan.md 与 plan-ready.md 的 task | 每个测试行都被某个 task 覆盖 |
-| design 与 specs 一致 | 对比 design.md 的技术决策与 specs 的 requirement | 不能矛盾 |
-| 测试类型匹配 | 检查 test-plan.md 的"类型"列与测试文件位置 | 单元测试不在集成目录 |
-| 任务顺序合理 | 检查 plan-ready.md 的 task 依赖关系 | 被依赖方排在前面 |
-
-**辅助脚本**：gate.mjs `check-cross-ref` 可自动检测 test-plan ↔ plan-ready 交叉引用问题。路径定位同上（见主 SKILL.md「状态检测 → Helpers 定位」）。
-
-#### 7.5 依赖注入验证
-
-| 检查项 | 方法 | 判定标准 |
-|--------|------|----------|
-| 依赖已注入 | 检查 @Autowired/@Inject/@Resource | 所有需要的依赖都已注入 |
-| 注入方式正确 | 检查构造器注入 vs 字段注入 | 符合项目约定 |
-| 无需新增依赖 | 对比 design.md 与实际代码 | 不需要额外注入 |
-
-#### 7.6 修正循环
+#### 7.1 修正循环
 
 ```mermaid
 开始检查
@@ -408,6 +347,10 @@ grep -rn "methodName" src/ --include="*.java" -B 5
   | 场景 | 输入 | 预期 | 实际 | 匹配 |
   |------|------|------|------|------|
   | ... | ... | ... | ... | ✅/❌ |
+- [ ] 状态叉乘矩阵完整（有多条件守卫/枚举状态时必填，格式见 `references/code-verification.md`）
+  | 组合 | 覆盖它的 T-id | 空白理由 |
+  |------|--------------|----------|
+  | ... | T-00x / **空白** | ... |
 - [ ] 依赖注入完整
 
 ### 完整性 ✅/❌

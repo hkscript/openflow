@@ -387,6 +387,29 @@ console.log('\n[4] resolveCurrentTask 选择器解析');
       id: 'T-001', file: 'src/component.test.ts', selector: 'src/component.test.ts::adds widget',
     }]);
   });
+  // 不变量行（INV-00x）是 test-plan 的一等公民：task 声明了它，task-build 就必须
+  // 把它的选择器算进本任务可编辑范围，否则写不变量测试会被强制层挡下来。
+  run('INV-001 不变量行解析为本 task 拥有的选择器', () => {
+    const dir2 = makeSelectorWorkspace();
+    write(dir2, 'openspec/changes/add-widget/test-plan.md', [
+      'T-001: `src/component.test.ts::adds widget` 🔴 RED ✅ PASS',
+      'INV-001: `src/component.test.ts::always emits an event` covers T-001',
+    ].join('\n'));
+    write(dir2, 'openspec/changes/add-widget/plan-ready.md', [
+      '### Task 1: widget',
+      '- Test cases: T-001, INV-001',
+      '- Files: src/component.ts, src/component.test.ts',
+    ].join('\n'));
+    writePhase(dir2, { version: 1, change: 'add-widget', phase: 'build', mode: 'task-build', task: '1' });
+    const st = rules.readPhaseState(dir2).state;
+    const r = rules.resolveCurrentTask(dir2, st);
+    assert.equal(r.error, null, String(r.error));
+    assert.deepEqual(r.task.testIds, ['T-001', 'INV-001']);
+    assert.deepEqual(r.task.selectors.map((s) => s.selector), [
+      'src/component.test.ts::adds widget',
+      'src/component.test.ts::always emits an event',
+    ]);
+  });
   run('task 2 唯一 legacy #2 解析', () => {
     const st = { ...state, task: '2' };
     const r = rules.resolveCurrentTask(dir, st);

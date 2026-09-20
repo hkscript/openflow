@@ -345,12 +345,15 @@ function parseTestPlanRows(content: string): TestSelector[] {
     const trimmed = line.trim();
     if (!trimmed) continue;
     // Canonical stable-row grammar (Task 7): `T-001: \`file::selector\`` with an
-    // optional trailing status suffix (`✅ PASS` / `⬜ TODO` / `❌ FAIL`). The
-    // suffix is captured-and-ignored here — the selector mapping only reads the
+    // optional trailing status suffix (`🔴 RED` evidence + `✅ PASS` / `⬜ TODO` /
+    // `❌ FAIL`). Invariant rows share the grammar with an `INV-` id and a
+    // `covers T-00x, …` clause; they are ordinary owned selectors here, so a task
+    // that declares `Test cases: T-001, INV-001` may edit both regions. The
+    // suffix is captured-and-ignored — the selector mapping only reads the
     // backtick content, so status updates never corrupt TDD scoping. This exact
-    // regex is the canonical pattern shared by gate.mjs / detect.mjs / enforce.mjs
-    // / opencode.ts; keep the five in sync (review M3).
-    const m = trimmed.match(/^([T#]\S+)\s*:\s*`([^`]+)`(?:\s+(.+))?$/);
+    // regex is the canonical pattern shared by gate.mjs / detect.mjs; keep the
+    // three in sync (review M3).
+    const m = trimmed.match(/^([T#]\S+|INV-\d+)\s*:\s*`([^`]+)`(?:\s+(.+))?$/);
     if (!m) continue;
     const id = m[1];
     const selector = m[2].trim();
@@ -447,8 +450,8 @@ export function resolveCurrentTask(cwd: string, state: PhaseState): ResolveTaskR
   const testIds = block.testCases;
   if (testIds.length === 0) return { task: null, error: `Task ${taskId} 没有声明 Test cases` };
 
-  // reject mixed reference forms (stable T-id + legacy #N in one task)
-  const hasStable = testIds.some((id) => /^T-\d+$/.test(id));
+  // reject mixed reference forms (stable T-id/INV-id + legacy #N in one task)
+  const hasStable = testIds.some((id) => /^(?:T|INV)-\d+$/.test(id));
   const hasLegacy = testIds.some((id) => /^#\d+$/.test(id));
   if (hasStable && hasLegacy) {
     return { task: null, error: 'tdd-task-unmapped: 混用稳定 T-id 与 legacy #N 引用' };

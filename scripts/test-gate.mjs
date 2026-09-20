@@ -591,8 +591,8 @@ const TEST_PLAN = [
   '# test-plan', '',
   '| # | 场景 | 状态 |',
   '|---|---|---|',
-  '| 1 | 场景一：widget 渲染 | ✅ PASS |',
-  '| 2 | 场景二：widget 数据 | ✅ PASS |',
+  '| 1 | 场景一：widget 渲染 | ✅ PASS 🔴 RED |',
+  '| 2 | 场景二：widget 数据 | ✅ PASS 🔴 RED |',
 ].join('\n');
 
 const PLAN_READY = [
@@ -604,7 +604,8 @@ const PLAN_READY = [
 
 const DESIGN = [
   '## 现状与影响面', '',
-  'widget 模块目前缺失，需要新增。', '',
+  '### 改动点 1：新增 widget 渲染',
+  '- 目标：`src/app.js::renderWidget`', '',
   '## 改动文件', '',
   '- src/app.js',
 ].join('\n');
@@ -752,8 +753,8 @@ console.log('\n[8b] canonical test-plan 稳定行（review F1/F2）');
 
 {
   const CANONICAL_TP = [
-    'T-001: `tests/auth/test_login.py::test_login_with_valid_credentials` ✅ PASS',
-    'T-002: `tests/auth/test_login.py::test_login_with_wrong_password` ✅ PASS',
+    'T-001: `tests/auth/test_login.py::test_login_with_valid_credentials` 🔴 RED ✅ PASS',
+    'T-002: `tests/auth/test_login.py::test_login_with_wrong_password` 🔴 RED ✅ PASS',
   ].join('\n');
   const CANONICAL_PR = [
     '# plan-ready', '',
@@ -792,12 +793,173 @@ console.log('\n[8b] canonical test-plan 稳定行（review F1/F2）');
   });
 }
 
+// A ✅ PASS row whose assertion was never observed failing is the exact shape of
+// the real-world bug this check exists for: an assertion with no failing power
+// (only `never()`-style checks, or none at all) is green from the first run, so
+// a do-nothing regression keeps it green. RED is the machine trace of TDD Step 2.
+console.log('\n[8b-red] 🔴 RED 证据（✅ PASS 必须见过红）');
+
+{
+  const TEST_FILE = 'def test_login_with_valid_credentials():\n    assert True\n\ndef test_login_with_wrong_password():\n    assert True\n';
+  const NO_RED = [
+    'T-001: `tests/auth/test_login.py::test_login_with_valid_credentials` ✅ PASS',
+    'T-002: `tests/auth/test_login.py::test_login_with_wrong_password` 🔴 RED ✅ PASS',
+  ].join('\n');
+  const WITH_RED = NO_RED.replace(
+    'test_login_with_valid_credentials` ✅ PASS',
+    'test_login_with_valid_credentials` 🔴 RED ✅ PASS',
+  );
+
+  function redFixture(tp) {
+    const { dir } = makeGateFixture();
+    write(dir, 'openspec/changes/add-widget/test-plan.md', tp);
+    write(dir, 'tests/auth/test_login.py', TEST_FILE);
+    return dir;
+  }
+
+  run('✅ PASS 缺 🔴 RED -> check-test-plan fail + red_evidence_missing', () => {
+    const r = runGate(redFixture(NO_RED), 'check-test-plan', 'add-widget');
+    assert.equal(r.pass, false, JSON.stringify(r));
+    assert.equal(r.all_pass, false, JSON.stringify(r));
+    assert.equal(r.stats.red_missing, 1, JSON.stringify(r.stats));
+    const issue = (r.issues || []).find((i) => i.type === 'red_evidence_missing');
+    assert.ok(issue, JSON.stringify(r.issues));
+    assert.equal(issue.id, 'T-001', JSON.stringify(issue));
+  });
+
+  run('✅ PASS 带 🔴 RED -> check-test-plan pass', () => {
+    const r = runGate(redFixture(WITH_RED), 'check-test-plan', 'add-widget');
+    assert.equal(r.pass, true, JSON.stringify(r));
+    assert.equal(r.all_pass, true, JSON.stringify(r));
+    assert.equal(r.stats.red_missing, 0, JSON.stringify(r.stats));
+  });
+
+  run('缺 🔴 RED -> check-build-done all_tests_pass false', () => {
+    const dir = redFixture(NO_RED);
+    write(dir, 'openspec/changes/add-widget/plan-ready.md', [
+      '# plan-ready', '',
+      '### Task 1: login',
+      '- Test cases: T-001, T-002',
+      '- Files: `tests/auth/test_login.py`',
+      '- [x] 补测试',
+    ].join('\n'));
+    const r = runGate(dir, 'check-build-done', 'add-widget');
+    assert.equal(r.pass, false, JSON.stringify(r));
+    assert.equal(r.all_tests_pass, false, JSON.stringify(r));
+    assert.ok((r.issues || []).some((i) => i.type === 'red_evidence_missing'), JSON.stringify(r.issues));
+  });
+
+  // The whole point is that the receipt gate inherits it: a plan whose green
+  // rows were never red must not be able to reach a verify receipt.
+  run('缺 🔴 RED -> check-verify-prerequisites blocker（传导到 receipt 闸门）', () => {
+    const { dir } = makeGateFixture();
+    write(dir, 'openspec/changes/add-widget/test-plan.md', TEST_PLAN.replace(/ 🔴 RED/g, ''));
+    const r = runGate(dir, 'check-verify-prerequisites', 'add-widget');
+    assert.equal(r.pass, false, JSON.stringify(r));
+    assert.match(r.blockers.join('\n'), /red_evidence_missing/, JSON.stringify(r.blockers));
+  });
+
+  run('legacy 表格行同样要求 🔴 RED', () => {
+    const { dir } = makeGateFixture();
+    write(dir, 'openspec/changes/add-widget/test-plan.md', TEST_PLAN.replace(' 🔴 RED', ''));
+    const r = runGate(dir, 'check-test-plan', 'add-widget');
+    assert.equal(r.pass, false, JSON.stringify(r));
+    assert.equal(r.stats.red_missing, 1, JSON.stringify(r.stats));
+  });
+
+  run('未完成的行不要求 🔴 RED（TODO 不是谎言）', () => {
+    const r = runGate(redFixture([
+      'T-001: `tests/auth/test_login.py::test_login_with_valid_credentials` ⬜ TODO',
+      'T-002: `tests/auth/test_login.py::test_login_with_wrong_password` 🔴 RED ✅ PASS',
+    ].join('\n')), 'check-test-plan', 'add-widget');
+    assert.equal(r.pass, true, JSON.stringify(r));
+    assert.equal(r.all_pass, false, JSON.stringify(r)); // 还有 TODO
+    assert.equal(r.stats.red_missing, 0, JSON.stringify(r.stats));
+  });
+}
+
+// Invariant rows carry the cross-combination assertions that a one-scenario-one-
+// test plan has no slot for. They are ordinary owned selectors plus a `covers`
+// clause that must resolve — an invariant claiming to cover a scenario that does
+// not exist is worse than no invariant at all.
+console.log('\n[8b-inv] INV 不变量行');
+
+{
+  const INV_TEST_FILE = 'def test_login_with_valid_credentials():\n    assert True\n\ndef test_always_has_effect():\n    assert True\n';
+
+  function invFixture(tp, pr) {
+    const { dir } = makeGateFixture();
+    write(dir, 'openspec/changes/add-widget/test-plan.md', tp);
+    if (pr) write(dir, 'openspec/changes/add-widget/plan-ready.md', pr);
+    write(dir, 'tests/auth/test_login.py', INV_TEST_FILE);
+    return dir;
+  }
+
+  const GOOD_TP = [
+    'T-001: `tests/auth/test_login.py::test_login_with_valid_credentials` 🔴 RED ✅ PASS',
+    'INV-001: `tests/auth/test_login.py::test_always_has_effect` covers T-001 🔴 RED ✅ PASS',
+  ].join('\n');
+  const INV_PR = [
+    '# plan-ready', '',
+    '### Task 1: login',
+    '- Test cases: T-001, INV-001',
+    '- Files: `tests/auth/test_login.py`',
+    '- [x] 补测试',
+  ].join('\n');
+
+  run('合法 INV 行 -> check-test-plan pass 且计入统计', () => {
+    const r = runGate(invFixture(GOOD_TP), 'check-test-plan', 'add-widget');
+    assert.equal(r.pass, true, JSON.stringify(r));
+    assert.equal(r.stats.total, 2, JSON.stringify(r.stats));
+    assert.equal(r.stats.pass, 2, JSON.stringify(r.stats));
+  });
+
+  run('INV 行缺 covers 子句 -> invariant_covers_missing', () => {
+    const r = runGate(invFixture(GOOD_TP.replace(' covers T-001', '')), 'check-test-plan', 'add-widget');
+    assert.equal(r.pass, false, JSON.stringify(r));
+    assert.ok((r.issues || []).some((i) => i.type === 'invariant_covers_missing'), JSON.stringify(r.issues));
+  });
+
+  run('INV 行 covers 指向不存在的 ID -> invariant_covers_unknown', () => {
+    const r = runGate(invFixture(GOOD_TP.replace('covers T-001', 'covers T-001, T-099')), 'check-test-plan', 'add-widget');
+    assert.equal(r.pass, false, JSON.stringify(r));
+    const issue = (r.issues || []).find((i) => i.type === 'invariant_covers_unknown');
+    assert.ok(issue, JSON.stringify(r.issues));
+    assert.match(issue.detail, /T-099/);
+  });
+
+  run('INV 行被 task 引用 -> check-cross-ref pass 且 INV 计入对账', () => {
+    const r = runGate(invFixture(GOOD_TP, INV_PR), 'check-cross-ref', 'add-widget');
+    assert.equal(r.pass, true, JSON.stringify(r));
+    // 计数断言是这条用例的失败能力所在：只断言 pass=true 的话，"INV 行压根没被
+    // 解析"（旧行为）同样满足它——零解析满足一切负空间断言。
+    assert.match(r.summary, /\b2 tests\b/, JSON.stringify(r));
+  });
+
+  run('INV 行没有任何 task 认领 -> uncovered_test', () => {
+    const pr = INV_PR.replace('- Test cases: T-001, INV-001', '- Test cases: T-001');
+    const r = runGate(invFixture(GOOD_TP, pr), 'check-cross-ref', 'add-widget');
+    assert.equal(r.pass, false, JSON.stringify(r));
+    const issue = (r.issues || []).find((i) => i.type === 'uncovered_test');
+    assert.ok(issue, JSON.stringify(r.issues));
+    assert.match(issue.detail, /INV-001/);
+  });
+
+  run('INV 行 ✅ PASS 缺 🔴 RED -> 同样 red_evidence_missing', () => {
+    const r = runGate(invFixture(GOOD_TP.replace('covers T-001 🔴 RED ✅ PASS', 'covers T-001 ✅ PASS')), 'check-test-plan', 'add-widget');
+    assert.equal(r.pass, false, JSON.stringify(r));
+    const issue = (r.issues || []).find((i) => i.type === 'red_evidence_missing');
+    assert.ok(issue, JSON.stringify(r.issues));
+    assert.equal(issue.id, 'INV-001', JSON.stringify(issue));
+  });
+}
+
 console.log('\n[8c] plan-ready 一致性硬校验（真实案例回归）');
 
 {
   const TP = [
-    'T-001: `tests/auth/test_login.py::test_login_with_valid_credentials` ✅ PASS',
-    'T-002: `tests/auth/test_login.py::test_login_with_wrong_password` ✅ PASS',
+    'T-001: `tests/auth/test_login.py::test_login_with_valid_credentials` 🔴 RED ✅ PASS',
+    'T-002: `tests/auth/test_login.py::test_login_with_wrong_password` 🔴 RED ✅ PASS',
   ].join('\n');
   const PR_HEAD = ['# plan-ready', ''];
 
@@ -838,8 +1000,8 @@ console.log('\n[8c] plan-ready 一致性硬校验（真实案例回归）');
   run('同一选择器被多个 T-id 拥有 -> duplicate_selector 提前拦截', () => {
     const { dir } = makeGateFixture();
     write(dir, 'openspec/changes/add-widget/test-plan.md', [
-      'T-001: `tests/auth/test_login.py::test_login_valid` ✅ PASS',
-      'T-002: `tests/auth/test_login.py::test_login_valid` ✅ PASS',
+      'T-001: `tests/auth/test_login.py::test_login_valid` 🔴 RED ✅ PASS',
+      'T-002: `tests/auth/test_login.py::test_login_valid` 🔴 RED ✅ PASS',
     ].join('\n'));
     write(dir, 'openspec/changes/add-widget/plan-ready.md', [
       ...PR_HEAD,
@@ -857,8 +1019,8 @@ console.log('\n[8c] plan-ready 一致性硬校验（真实案例回归）');
   run('机器行与追溯表函数名不一致 -> warning 不阻断', () => {
     const { dir } = makeGateFixture();
     write(dir, 'openspec/changes/add-widget/test-plan.md', [
-      'T-001: `tests/auth/test_login.py::test_login_a` ✅ PASS',
-      'T-002: `tests/auth/test_login.py::test_login_b` ✅ PASS',
+      'T-001: `tests/auth/test_login.py::test_login_a` 🔴 RED ✅ PASS',
+      'T-002: `tests/auth/test_login.py::test_login_b` 🔴 RED ✅ PASS',
       '',
       '## 追溯表',
       '',
@@ -1109,11 +1271,72 @@ console.log('\n[12] 改动点归属对账（Java 多行签名 / 窗口 / 豁免 
   }
 
   const JAVA = 'src/main/java/com/x/Multi.java';
-  const designFor = (body, files) => [
-    '## 现状与影响面', '', body, '',
+
+  /**
+   * 造一份声明式 design.md。
+   *
+   * decls 每项：
+   *   'file::method'                                     → `- 目标：`file::method``
+   *   { selector, follow: false, reason: '已废弃' }      → `- 并行路径：… → 不随改（已废弃）`
+   *   { selector, follow: true }                         → `- 并行路径：… → 随改`
+   */
+  const designFor = (decls, files, title = '变更') => [
+    '## 现状与影响面', '',
+    `### 改动点 1：${title}`,
+    ...decls.map((d) => (typeof d === 'string'
+      ? `- 目标：\`${d}\``
+      : `- 并行路径：\`${d.selector}\` → ${d.follow ? '随改' : `不随改（${d.reason}）`}`)),
+    '',
     '## 改动文件', '', ...files.map((f) => `- ${f}`),
   ].join('\n');
   const joined = (lines) => lines.join('\n') + '\n';
+
+  // ---- 声明契约：解析失败是 blocker，不是 warning ----
+
+  const declBlockerFixture = (impactBody) => ownershipFixture({
+    base: { [JAVA]: 'package com.x;\n\npublic class D {\n    void a() {\n        int x = 1;\n    }\n}\n' },
+    head: { [JAVA]: 'package com.x;\n\npublic class D {\n    void a() {\n        int x = 2;\n    }\n}\n' },
+    design: ['## 现状与影响面', '', ...impactBody, '', '## 改动文件', '', `- ${JAVA}`].join('\n'),
+  });
+
+  run('现状与影响面无 ### 改动点 小节 -> blocker', () => {
+    const dir = declBlockerFixture(['widget 模块需要改一下。']);
+    const r = runGate(dir, 'check-design-consistency', 'add-widget');
+    assert.equal(r.pass, false, '无声明必须 pass false');
+    assert.match(r.blockers.join('\n'), /改动点/, `blocker 应指出缺改动点声明: ${r.blockers.join('\n')}`);
+  });
+
+  run('改动点有小节但无目标声明 -> blocker', () => {
+    const dir = declBlockerFixture(['### 改动点 1：改点东西', '', '随便写点说明。']);
+    const r = runGate(dir, 'check-design-consistency', 'add-widget');
+    assert.equal(r.pass, false);
+    assert.match(r.blockers.join('\n'), /没有任何.*目标/, r.blockers.join('\n'));
+  });
+
+  run('选择器缺 :: 分隔（只写方法名）-> blocker', () => {
+    const dir = declBlockerFixture(['### 改动点 1：改点东西', '- 目标：`justAMethodName`']);
+    const r = runGate(dir, 'check-design-consistency', 'add-widget');
+    assert.equal(r.pass, false);
+    assert.match(r.blockers.join('\n'), /::/, r.blockers.join('\n'));
+  });
+
+  run('并行路径未标注随改/不随改 -> blocker（不能悬空）', () => {
+    const dir = declBlockerFixture([
+      '### 改动点 1：改点东西',
+      `- 目标：\`${JAVA}::a\``,
+      `- 并行路径：\`${JAVA}::aNew\``,
+    ]);
+    const r = runGate(dir, 'check-design-consistency', 'add-widget');
+    assert.equal(r.pass, false);
+    assert.match(r.blockers.join('\n'), /随改|不随改/, r.blockers.join('\n'));
+  });
+
+  run('形似声明但格式错 -> blocker（不静默忽略）', () => {
+    const dir = declBlockerFixture(['### 改动点 1：改点东西', '- 目标：src/a.java::a（忘了加反引号）']);
+    const r = runGate(dir, 'check-design-consistency', 'add-widget');
+    assert.equal(r.pass, false);
+    assert.match(r.blockers.join('\n'), /无法解析/, r.blockers.join('\n'));
+  });
 
   run('多行 Java 签名：hunk 归属到真实方法而非上一个方法', () => {
     const lines = (marker) => [
@@ -1132,7 +1355,7 @@ console.log('\n[12] 改动点归属对账（Java 多行签名 / 窗口 / 豁免 
     const dir = ownershipFixture({
       base: { [JAVA]: joined(lines('')) },
       head: { [JAVA]: joined(lines('        int c = 3;')) },
-      design: designFor('`processStrategyRule` 增加一行。', [JAVA]),
+      design: designFor([`${JAVA}::processStrategyRule`], [JAVA]),
     });
     const r = runGate(dir, 'check-design-consistency', 'add-widget');
     const w = (r.warnings || []).join('\n');
@@ -1165,7 +1388,7 @@ console.log('\n[12] 改动点归属对账（Java 多行签名 / 窗口 / 豁免 
     const dir = ownershipFixture({
       base: { [JAVA]: base },
       head: { [JAVA]: head },
-      design: designFor('`handleApproveNotPassVoidPausedActivity` 为新增方法。', [JAVA]),
+      design: designFor([`${JAVA}::handleApproveNotPassVoidPausedActivity`], [JAVA]),
     });
     const r = runGate(dir, 'check-design-consistency', 'add-widget');
     const w = (r.warnings || []).join('\n');
@@ -1192,7 +1415,7 @@ console.log('\n[12] 改动点归属对账（Java 多行签名 / 窗口 / 豁免 
     const dir = ownershipFixture({
       base: { [JAVA]: joined(lines('')) },
       head: { [JAVA]: joined(lines('            return true;')) },
-      design: designFor('`filterCompanyUnfitRuleParam` 增加分支。', [JAVA]),
+      design: designFor([`${JAVA}::filterCompanyUnfitRuleParam`], [JAVA]),
     });
     const r = runGate(dir, 'check-design-consistency', 'add-widget');
     const w = (r.warnings || []).join('\n');
@@ -1216,14 +1439,14 @@ console.log('\n[12] 改动点归属对账（Java 多行签名 / 窗口 / 豁免 
     const dir = ownershipFixture({
       base: { [JAVA]: baseSrc },
       head: { [JAVA]: headSrc },
-      design: designFor('只改 `mainFlow`；实现新增的私有辅助方法不作声称。', [JAVA]),
+      design: designFor([`${JAVA}::mainFlow`], [JAVA]),
     });
     const r = runGate(dir, 'check-design-consistency', 'add-widget');
     const w = (r.warnings || []).join('\n');
     assert.ok(!/改动点归属/.test(w), `新增方法不应报归属漂移: ${w}`);
   });
 
-  run('design 标注「无代码改动」的目标不报声称未落地', () => {
+  run('声明为「不随改」的并行路径不报声称未落地（显式豁免，不再靠正则猜）', () => {
     const baseSrc = joined([
       'package com.x;', '',
       'public class Exempt {',
@@ -1240,11 +1463,9 @@ console.log('\n[12] 改动点归属对账（Java 多行签名 / 窗口 / 豁免 
       base: { [JAVA]: baseSrc },
       head: { [JAVA]: headSrc },
       design: designFor([
-        '| 链路 | 方法 | 说明 |',
-        '|---|---|---|',
-        '| 市调驳回 | `rejectHandleFollowStatus` | 无代码改动（status=1 命中） |',
-        '| 其他 | `other` | 加一行 |',
-      ].join('\n'), [JAVA]),
+        `${JAVA}::other`,
+        { selector: `${JAVA}::rejectHandleFollowStatus`, follow: false, reason: 'status=1 命中，无代码改动' },
+      ], [JAVA]),
     });
     const r = runGate(dir, 'check-design-consistency', 'add-widget');
     const w = (r.warnings || []).join('\n');
@@ -1269,7 +1490,7 @@ console.log('\n[12] 改动点归属对账（Java 多行签名 / 窗口 / 豁免 
     const dir = ownershipFixture({
       base: { [JAVA]: baseSrc },
       head: { [JAVA]: headSrc },
-      design: designFor('`alpha` 需要改；定位键为 `task_id`。', [JAVA]),
+      design: designFor([`${JAVA}::alpha`], [JAVA]),
     });
     const r = runGate(dir, 'check-design-consistency', 'add-widget');
     const w = (r.warnings || []).join('\n');
@@ -1296,7 +1517,7 @@ console.log('\n[12] 改动点归属对账（Java 多行签名 / 窗口 / 豁免 
     const dir = ownershipFixture({
       base: { [JAVA]: baseSrc },
       head: { [JAVA]: headSrc },
-      design: designFor('`alpha` 与 `shared` 是改动链路。', [JAVA]),
+      design: designFor([`${JAVA}::alpha`, { selector: `${JAVA}::shared`, follow: false, reason: '本次不改，仅被调用' }], [JAVA]),
     });
     const r = runGate(dir, 'check-design-consistency', 'add-widget');
     const w = (r.warnings || []).join('\n');
@@ -1319,7 +1540,7 @@ console.log('\n[12] 改动点归属对账（Java 多行签名 / 窗口 / 豁免 
     const dir = ownershipFixture({
       base: { [JAVA]: baseSrc },
       head: { [JAVA]: headSrc },
-      design: designFor('只改 `alpha`。', [JAVA]),
+      design: designFor([`${JAVA}::alpha`], [JAVA]),
     });
     const r = runGate(dir, 'check-design-consistency', 'add-widget');
     const w = (r.warnings || []).join('\n');
@@ -1342,7 +1563,7 @@ console.log('\n[12] 改动点归属对账（Java 多行签名 / 窗口 / 豁免 
     const dir = ownershipFixture({
       base: { [JAVA]: joined(lines('')) },
       head: { [JAVA]: joined(lines('        int x = 2;')) },
-      design: designFor('`helper` 增加一行。', [JAVA]),
+      design: designFor([`${JAVA}::helper`], [JAVA]),
     });
     const r = runGate(dir, 'check-design-consistency', 'add-widget');
     const w = (r.warnings || []).join('\n');
@@ -1364,7 +1585,7 @@ console.log('\n[12] 改动点归属对账（Java 多行签名 / 窗口 / 豁免 
     const dir = ownershipFixture({
       base: { [TS]: joined(lines('')) },
       head: { [TS]: joined(lines('    const total = ratio * 2;')) },
-      design: designFor('`computeTotal` 增加一行。', [TS]),
+      design: designFor([`${TS}::computeTotal`], [TS]),
     });
     const r = runGate(dir, 'check-design-consistency', 'add-widget');
     const w = (r.warnings || []).join('\n');
@@ -1388,14 +1609,14 @@ console.log('\n[12] 改动点归属对账（Java 多行签名 / 窗口 / 豁免 
     const dir = ownershipFixture({
       base: { [TS]: joined(lines('')) },
       head: { [TS]: joined(lines('    const total = ratio * 2;')) },
-      design: designFor('`computeTotal` 增加一行。', [TS]),
+      design: designFor([`${TS}::computeTotal`], [TS]),
     });
     const r = runGate(dir, 'check-design-consistency', 'add-widget');
     const w = (r.warnings || []).join('\n');
     assert.ok(!/改动点归属/.test(w), `正则里的反引号不应破坏后续解析: ${w}`);
   });
 
-  run('同名方法已在别处落地时不报声称未落地（跨文件同名消歧）', () => {
+  run('跨文件同名：声明带文件归属，各判各的（不再互相顶替）', () => {
     const ALPHA = 'src/main/java/com/x/Alpha.java';
     const BETA = 'src/main/java/com/x/Beta.java';
     const alphaLines = (marker) => [
@@ -1420,11 +1641,50 @@ console.log('\n[12] 改动点归属对账（Java 多行签名 / 窗口 / 豁免 
     const dir = ownershipFixture({
       base: { [ALPHA]: joined(alphaLines('        int x = 1;')), [BETA]: betaSrc },
       head: { [ALPHA]: joined(alphaLines('        int x = 2;')), [BETA]: betaSrc.replace('        int b1 = 1;', '        int b1 = 2;') },
-      design: designFor('上游 `Alpha.target` 需改；`target` 显式写 NORMAL；`other` 加一行。', [ALPHA, BETA]),
+      design: designFor([`${ALPHA}::target`, `${BETA}::other`], [ALPHA, BETA]),
     });
     const r = runGate(dir, 'check-design-consistency', 'add-widget');
     const w = (r.warnings || []).join('\n');
-    assert.ok(!/声称未落地/.test(w), `同名方法已在 Alpha 落地，不应反查 Beta: ${w}`);
+    assert.ok(!/声称未落地/.test(w), `两处声明都已落地，不应报未落地: ${w}`);
+  });
+
+  run('跨文件同名：声明 Beta::target 但改动只落在 Alpha::target -> 必须报未落地', () => {
+    const ALPHA = 'src/main/java/com/x/Alpha.java';
+    const BETA = 'src/main/java/com/x/Beta.java';
+    const alphaLines = (marker) => [
+      'package com.x;', '',
+      'public class Alpha {',
+      '    public void target(String a) {',
+      marker,
+      '    }',
+      '}', '',
+    ];
+    const betaSrc = joined([
+      'package com.x;', '',
+      'public class Beta {',
+      '    public void target(String a) {',
+      '        int a1 = 1;',
+      '    }', '',
+      '    public void other(String a) {',
+      '        int b1 = 1;',
+      '    }',
+      '}', '',
+    ]);
+    const dir = ownershipFixture({
+      base: { [ALPHA]: joined(alphaLines('        int x = 1;')), [BETA]: betaSrc },
+      head: {
+        [ALPHA]: joined(alphaLines('        int x = 2;')),
+        [BETA]: betaSrc.replace('        int b1 = 1;', '        int b1 = 2;'),
+      },
+      // 声明 Beta::target 要改，但 Beta 的改动实际落在 other 里。
+      // 旧实现只比对裸方法名，看到 Alpha 里有个同名 target 落了地就放过（landedNamesGlobal）；
+      // 声明带文件归属后这是确定的缺陷，必须报出来。
+      design: designFor([`${BETA}::target`, `${ALPHA}::target`], [ALPHA, BETA]),
+    });
+    const r = runGate(dir, 'check-design-consistency', 'add-widget');
+    const w = (r.warnings || []).join('\n');
+    assert.match(w, /声称未落地/, `Beta::target 未落地必须报出: ${w}`);
+    assert.match(w, /Beta\.java::target/, `警告必须点名是哪个文件的方法: ${w}`);
   });
 }
 

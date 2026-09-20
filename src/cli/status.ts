@@ -29,7 +29,7 @@ export const statusCommand = new Command('status')
     if (depStatus.superpowers.installed) {
       logger.success(`Superpowers${depStatus.superpowers.path ? ` (${depStatus.superpowers.path})` : ''}`);
     } else {
-      logger.warn('Superpowers — not installed (build phase will use manual mode)');
+      logger.warn('Superpowers — not installed (build phase is blocked; there is no manual mode)');
     }
 
     logger.blank();

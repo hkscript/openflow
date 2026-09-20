@@ -130,18 +130,19 @@ function collectTestPlanStats(changeDir) {
   const content = safeRead(tpPath);
   if (!content) return null;
 
-  let pass = 0, todo = 0, fail = 0;
+  let pass = 0, todo = 0, fail = 0, redMissing = 0;
 
-  // Canonical stable-row grammar (Task 7): `T-001: \`file::selector\`` with an
-  // optional status suffix (`✅ PASS` / `⬜ TODO` / `❌ FAIL`). This is the
-  // primary grammar emitted by the spec template. The legacy table grammar is
-  // still counted as a fallback for pre-existing test-plans.
+  // Canonical stable-row grammar (Task 7): `T-001: \`file::selector\`` with
+  // optional status markers (`🔴 RED` evidence + `✅ PASS` / `⬜ TODO` / `❌ FAIL`).
+  // This is the primary grammar emitted by the spec template. The legacy table
+  // grammar is still counted as a fallback for pre-existing test-plans.
   const rows = parseCanonicalTestRows(content);
   if (rows.length > 0) {
     for (const r of rows) {
       if (r.status === 'pass') pass++;
       else if (r.status === 'fail') fail++;
       else todo++;
+      if (r.status === 'pass' && !r.red) redMissing++;
     }
   } else {
     // Legacy table rows (`| T-001 | … | ✅ PASS |`). Match a marker at the START
@@ -150,9 +151,11 @@ function collectTestPlanStats(changeDir) {
     // rows, silently skipping ~half of them (one match sets lastIndex to
     // end-of-line; a shorter next line fails and resets before its marker is
     // ever checked).
-    const passRe = /\|\s*(?:✅|PASS\b)/i;
-    const todoRe = /\|\s*(?:TODO\b|⬜|⏳)/i;
-    const failRe = /\|\s*(?:❌|FAIL\b)/i;
+    // A leading `🔴 RED` in the status cell must not hide the result marker
+    // behind it — the RED evidence marker is written before the row goes green.
+    const passRe = /\|\s*(?:🔴\s*RED\s*)?(?:✅|PASS\b)/i;
+    const todoRe = /\|\s*(?:🔴\s*RED\s*)?(?:TODO\b|⬜|⏳)/i;
+    const failRe = /\|\s*(?:🔴\s*RED\s*)?(?:❌|FAIL\b)/i;
     const lines = content.split('\n');
     let inTable = false;
     for (const line of lines) {
@@ -160,29 +163,43 @@ function collectTestPlanStats(changeDir) {
       if (!inTable) continue;
       if (!line.trim().startsWith('|')) { inTable = false; continue; }
 
-      if (passRe.test(line)) pass++;
+      if (passRe.test(line)) {
+        pass++;
+        if (!RED_MARKER_RE.test(line)) redMissing++;
+      }
       else if (failRe.test(line)) fail++;
       else if (todoRe.test(line)) todo++;
     }
   }
 
   const total = pass + todo + fail;
-  return { pass, todo, fail, total, allPass: total > 0 && todo === 0 && fail === 0 };
+  // redMissing blocks allPass on purpose: a row that claims PASS without ever
+  // being seen RED is exactly the "test with no failing power" case, so the
+  // router must send it back to build rather than on to verify.
+  return {
+    pass, todo, fail, total, redMissing,
+    allPass: total > 0 && todo === 0 && fail === 0 && redMissing === 0,
+  };
 }
 
 /**
  * Parse canonical test-plan stable rows: `T-001: \`file::selector\`` optionally
- * followed by a status suffix (`✅ PASS` / `⬜ TODO` / `❌ FAIL`). The exact same
- * regex is replicated in gate.mjs / enforce.mjs / opencode.ts / rules.ts — keep
- * them in sync (review M3). Here the captured suffix drives pass/todo/fail stats.
- * Returns [{id, file, selector, status}]; empty array when no stable rows.
+ * followed by status markers — the RED evidence marker (`🔴 RED`) and the result
+ * marker (`✅ PASS` / `⬜ TODO` / `❌ FAIL`). Invariant rows use the same grammar
+ * with an `INV-` id plus a `covers T-00x, …` clause. The exact same regex is
+ * replicated in gate.mjs / rules.ts — keep them in sync (review M3). Here the
+ * captured suffix drives pass/todo/fail stats and the RED evidence count.
+ * Returns [{id, file, selector, status, red}]; empty array when no stable rows.
  */
+const CANONICAL_ROW_RE = /^([T#]\S+|INV-\d+)\s*:\s*`([^`]+)`(?:\s+(.+))?$/;
+const RED_MARKER_RE = /🔴|\bRED\b/;
+
 function parseCanonicalTestRows(content) {
   const out = [];
   for (const line of content.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    const m = trimmed.match(/^([T#]\S+)\s*:\s*`([^`]+)`(?:\s+(.+))?$/);
+    const m = trimmed.match(CANONICAL_ROW_RE);
     if (!m) continue;
     const id = m[1];
     const selector = m[2].trim();
@@ -192,7 +209,7 @@ function parseCanonicalTestRows(content) {
     let status = 'todo';
     if (/FAIL|❌/.test(suffix)) status = 'fail';
     else if (/PASS|✅/.test(suffix)) status = 'pass';
-    out.push({ id, file, selector, status });
+    out.push({ id, file, selector, status, red: RED_MARKER_RE.test(suffix) });
   }
   return out;
 }
@@ -587,7 +604,7 @@ function detectContradictions(signals, changeName) {
       desc = `test_plan_stats: ${v.pass}/${v.total} PASS`;
     } else if (key === 'test_plan_stats' && !v.allPass) {
       isNegative = true;
-      desc = `test_plan_stats: ${v.pass}/${v.total} PASS (${v.todo} TODO, ${v.fail} FAIL)`;
+      desc = `test_plan_stats: ${v.pass}/${v.total} PASS (${v.todo} TODO, ${v.fail} FAIL, ${v.redMissing ?? 0} 缺 🔴 RED)`;
     } else if (key === 'git_commits' && v.hasRelatedCommits) {
       desc = `git_commits: ${v.relatedCount} related commits`;
     } else if (key === 'git_commits' && !v.hasRelatedCommits) {
@@ -760,6 +777,16 @@ function suggestPhase(signals, contradictions, changeCount, phaseState, receipt)
       };
     }
     return { phase: 'verify', reason: 'all_tests_pass' };
+  }
+
+  // A plan that is otherwise green but missing RED evidence is not "in
+  // progress" — it is a plan whose green rows were never proven able to fail.
+  if ((tpStats.redMissing ?? 0) > 0 && tpStats.todo === 0 && tpStats.fail === 0) {
+    return {
+      phase: 'build',
+      reason: 'red_evidence_missing',
+      note: `${tpStats.redMissing}/${tpStats.total} 个 ✅ PASS 行没有 🔴 RED 证据 — 回 build 按 TDD Step 2 观察其失败（改断言或补断言），再重新标记`,
+    };
   }
 
   if (tpStats.pass > 0 || prTasks?.done > 0) {

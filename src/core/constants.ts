@@ -55,9 +55,10 @@ export const TOOL_PATHS: Record<string, ToolPaths> = {
     hooksConfigFile: '.codex/hooks.json',
     globalHooksConfigFile: '.codex/hooks.json',
   },
-  cursor: {
-    skillsDir: '.cursor/skills',
-  },
+  // Cursor is intentionally absent: it exposes no hook or plugin mechanism, so
+  // the lifecycle runtime (enforce/gate/detect/receipt/archive) cannot run
+  // there. Installing skills-only would give prompt-level guidance that looks
+  // enforced but is not — OpenFlow refuses that rather than degrading silently.
   opencode: {
     skillsDir: '.opencode/skills',
     globalSkillsDir: '.config/opencode/skills',

@@ -25,9 +25,9 @@ Superpowers brainstorming **必须可用**。运行 gate 脚本检测（同步�
 node <base>/.claude/hooks/openflow-gate.mjs check-brainstorming
 ```
 
-脚本不可用时，手动检查本地或全局 skills 目录下是否存在 `brainstorming/SKILL.md`。
+脚本缺失或报错 → 停止并要求重装（见主 SKILL.md「客户端支持」），不要改用手动检查 skills 目录。
 
-如果不存在，报错终止：
+如果脚本报告 brainstorming 不存在，报错终止：
 > "❌ Superpowers brainstorming 未安装。openflow brainstorming 依赖 Superpowers 做深度探索。请先安装：`/plugin install superpowers@claude-plugins-official`，然后重试。"
 
 ### 1. 读取上下文（openflow 负责）

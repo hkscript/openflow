@@ -161,6 +161,8 @@ def test_login_with_wrong_password():
 
 生成测试桩后运行一次测试套件，确认所有新测试都 FAIL（红），这验证测试基础设施是正常工作的。
 
+**这一次红不算 `🔴 RED` 证据**——桩是靠 `assert False` 红的，证明的是"测试跑得起来"，不是"这条断言有失败能力"。`🔴 RED` 只能在 Step 2（断言写完、实现还没写）标记。
+
 ### 4. 生成详细实现计划
 
 调用 Superpowers 的 `writing-plans` skill，以 `test-plan.md` + `plan-ready.md` 为输入，生成详细实现步骤。
@@ -191,14 +193,24 @@ task-build 是 build 的第二种受控模式：**只允许修改当前 Task 声
 
 ```
 Step 1: 补全测试桩 → 写真正的测试断言
-Step 2: 运行测试 → 确认 FAIL（红）
+Step 2: 运行测试 → 确认 FAIL（红）→ 贴出失败输出 → 在 test-plan.md 对应行追加 `🔴 RED`
 Step 3: 写最小实现代码
 Step 4: 运行测试 → 确认 PASS（绿）
 Step 5: 可选重构
 Step 6: git commit（单 task）
 Step 7: 更新 plan-ready.md 中该 task 的 checkbox 为 [x]
-Step 8: 在 test-plan.md 对应稳定行**行尾**追加状态后缀 `✅ PASS`（保持 `T-00x: \`<选择器>\`` 行格式不变，只在反引号后追加后缀，如 `T-001: \`tests/auth/test_login.py::test_login_with_valid_credentials\` ✅ PASS`）
+Step 8: 在 test-plan.md 对应稳定行**行尾**追加状态后缀 `✅ PASS`（保持 `T-00x: \`<选择器>\`` 行格式不变，只在反引号后追加后缀，如 `T-001: \`tests/auth/test_login.py::test_login_with_valid_credentials\` 🔴 RED ✅ PASS`）
 ```
+
+**Step 2 的 `🔴 RED` 是闸门，不是记录**：`check-test-plan` / `check-build-done` 会检查每个 `✅ PASS` 行是否带 `🔴 RED`，缺了直接判失败（`red_evidence_missing`），detect 也会把这个变更路由回 build。
+
+为什么单独卡这一步：**没见过红的测试不证明任何事**。只钉负空间的断言——`verify(..., never())`、`assertNull`、"不抛异常"、以及干脆一条断言都没有——在实现存在之前就已经是绿的。它永远不会红，因此它也永远不会因为回归而变红：一个什么都不做的实现同样满足"什么都没发生"。真实事故长这样：守卫改动让某条链路彻底不执行，而所有相关用例都是 `never()` 形状，零调用把每一条都满足了，全套绿灯。
+
+所以 Step 2 的判定标准是两条，缺一不可：
+1. **确实红了**——绿的就说明这条断言没有失败能力，回 Step 1 改断言（把"不得发生 X"改写成"必须发生 Y"），不是回 Step 3 写实现
+2. **红的原因对**——失败信息必须指向"预期的行为没发生"，而不是 NPE / 导入错误 / fixture 没建好。红错了地方等于没红，同样回 Step 1
+
+`INV-00x` 不变量行走同一条铁律，且它天然更容易测出假绿：一条正确的不变量在实现前必然对**多个**组合报失败。只在一个组合上红 → 断言的全称范围写窄了。
 
 **迁移期旧引用**：plan-ready/test-plan 中旧的唯一 `#N` 引用可临时使用；但下次 spec/amend 编辑时必须转为稳定 ID `T-00x`。**混合 `T-id` 与 `#N`、重复、歧义引用会导致 `tdd-task-unmapped` 报错（fail-closed）**，不要混用。
 
@@ -206,7 +218,7 @@ Step 8: 在 test-plan.md 对应稳定行**行尾**追加状态后缀 `✅ PASS`�
 
 **每完成一个 task，同步更新：**
 - `plan-ready.md` 中该 task checkbox → `[x]`
-- `test-plan.md` 中对应行 → 追加状态列 `✅ PASS`
+- `test-plan.md` 中对应行 → 已有 `🔴 RED`（Step 2 写的），再追加 `✅ PASS`
 - `tasks.md` 会在 close 阶段从 plan-ready.md 自动重新生成，build 阶段无需手动维护
 
 ### 6. 全量回归

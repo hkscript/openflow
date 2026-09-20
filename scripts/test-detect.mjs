@@ -194,6 +194,54 @@ run('canonical 稳定行状态后缀 -> test_plan_stats 计数（F1）', () => {
   assert.equal(stats.allPass, false);
 });
 
+// 全绿但没有 RED 证据的计划不是"做完了"，是"从没被证明能红"——路由必须退回 build，
+// 否则 verify 会给一批零失败能力的断言发通行证。
+run('全 PASS 但缺 🔴 RED -> 路由回 build（red_evidence_missing）', () => {
+  const dir = tmpdir();
+  mkChange(dir, 'add-widget');
+  write(dir, 'openspec/changes/add-widget/test-plan.md', [
+    'T-001: `tests/auth/login.test.ts::valid credentials` ✅ PASS',
+    'T-002: `tests/auth/login.test.ts::wrong password` 🔴 RED ✅ PASS',
+  ].join('\n'));
+  const json = runDetect(dir);
+  const stats = json.signals.test_plan_stats.value;
+  assert.equal(stats.pass, 2, JSON.stringify(stats));
+  assert.equal(stats.redMissing, 1, JSON.stringify(stats));
+  assert.equal(stats.allPass, false, JSON.stringify(stats));
+  assert.equal(json.suggested_phase, 'build', JSON.stringify(json.routing ?? json));
+});
+
+run('全 PASS 且都带 🔴 RED -> 路由 verify', () => {
+  const dir = tmpdir();
+  mkChange(dir, 'add-widget');
+  write(dir, 'openspec/changes/add-widget/test-plan.md', [
+    'T-001: `tests/auth/login.test.ts::valid credentials` 🔴 RED ✅ PASS',
+    'T-002: `tests/auth/login.test.ts::wrong password` 🔴 RED ✅ PASS',
+  ].join('\n'));
+  const json = runDetect(dir);
+  const stats = json.signals.test_plan_stats.value;
+  assert.equal(stats.redMissing, 0, JSON.stringify(stats));
+  assert.equal(stats.allPass, true, JSON.stringify(stats));
+  assert.equal(json.suggested_phase, 'verify', JSON.stringify(json.routing ?? json));
+});
+
+run('legacy 表格：🔴 RED 与状态标记同格不影响计数', () => {
+  const dir = tmpdir();
+  mkChange(dir, 'add-widget');
+  write(dir, 'openspec/changes/add-widget/test-plan.md', [
+    '# Test Plan',
+    '| # | 测试 | 状态 |',
+    '| --- | --- | --- |',
+    '| T-001 | unit test | 🔴 RED ✅ PASS |',
+    '| T-002 | another | ✅ PASS |',
+    '',
+  ].join('\n'));
+  const stats = runDetect(dir).signals.test_plan_stats.value;
+  assert.equal(stats.pass, 2, JSON.stringify(stats));
+  assert.equal(stats.total, 2, JSON.stringify(stats));
+  assert.equal(stats.redMissing, 1, JSON.stringify(stats));
+});
+
 console.log('\n[2] phase-first change selection');
 
 run('多个活跃变更时 phase 指定的 change 优先于 mtime', () => {

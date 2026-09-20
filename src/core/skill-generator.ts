@@ -30,8 +30,9 @@ export function generateSkills(options: GenerateOptions): void {
   for (const tool of tools) {
     const toolPaths = TOOL_PATHS[tool];
     if (!toolPaths) {
-      logger.warn(`Unknown tool: ${tool}, skipping`);
-      continue;
+      throw new Error(
+        `Unsupported tool: ${tool}. Supported clients: ${Object.keys(TOOL_PATHS).join(', ')}. OpenFlow only supports clients that can run the lifecycle enforcement runtime.`
+      );
     }
 
     const effectiveSkillsDir = global && toolPaths.globalSkillsDir ? toolPaths.globalSkillsDir : toolPaths.skillsDir;
@@ -46,25 +47,34 @@ export function generateSkills(options: GenerateOptions): void {
       fs.mkdirSync(skillsDir, { recursive: true });
     }
 
+    // Claude and Codex use command hooks; OpenCode uses a plugin plus the same
+    // helper scripts under its own hooks dir. Every supported client gets the
+    // full lifecycle runtime — a client that cannot run it is not supported.
     const effectiveHooksDir = global && toolPaths.globalHooksDir
       ? toolPaths.globalHooksDir
-      : toolPaths.hooksDir;
-    // Claude and Codex use command hooks; OpenCode uses a plugin plus the same
-    // helper scripts. Cursor remains skills-only.
-    const hasHookRuntime = Boolean(effectiveHooksDir) || tool === 'opencode';
-    const hasEnforceScript = tool === 'claude' || tool === 'codex';
+      : tool === 'opencode'
+        ? path.join(path.dirname(effectiveSkillsDir), 'hooks')
+        : toolPaths.hooksDir;
+    if (!effectiveHooksDir) {
+      throw new Error(
+        `Tool ${tool} has no hooks directory configured — OpenFlow cannot install its enforcement runtime and will not install skills without it.`
+      );
+    }
 
-    // Generate main SKILL.md
-    generateSkillFile(skillsDir, 'SKILL.md', depStatus, tool, effectiveSkillsDir, effectiveHooksDir, hasHookRuntime, hasEnforceScript);
+    // Generate main SKILL.md (the only file carrying codex rewrite anchors)
+    generateSkillFile(skillsDir, 'SKILL.md', depStatus, tool, effectiveSkillsDir, effectiveHooksDir, true);
 
     // Generate phase files
     const phases = ['proposal', 'brainstorming', 'spec', 'amend', 'build', 'verify', 'close'];
     for (const phase of phases) {
-      generateSkillFile(skillsDir, `${phase}.md`, depStatus, tool, effectiveSkillsDir, effectiveHooksDir, hasHookRuntime, hasEnforceScript);
+      generateSkillFile(skillsDir, `${phase}.md`, depStatus, tool, effectiveSkillsDir, effectiveHooksDir);
     }
 
+    // Generate phase reference files (loaded on demand, not on every invocation)
+    generateReferenceFiles(skillsDir, tool, effectiveSkillsDir, effectiveHooksDir);
+
     // Generate sub-skill shortcuts (e.g., openflow-proposal, openflow-spec)
-    generateSubSkillShortcuts(baseDir, toolPaths, phases, depStatus, tool, effectiveSkillsDir, effectiveHooksDir, hasHookRuntime, hasEnforceScript);
+    generateSubSkillShortcuts(baseDir, toolPaths, phases, depStatus, tool, effectiveSkillsDir, effectiveHooksDir);
 
     logger.success(`${tool} skills generated`);
 
@@ -84,6 +94,49 @@ export function generateSkills(options: GenerateOptions): void {
   }
 }
 
+/**
+ * Installs templates/references/*.md alongside the skill.
+ *
+ * These carry the long-form checklists that phase files pull in on demand, so
+ * a phase file stays small enough to load on every invocation. Every file in
+ * templates/references is installed; a missing directory is a packaging defect.
+ */
+function generateReferenceFiles(
+  skillsDir: string,
+  tool: string,
+  effectiveSkillsDir: string,
+  effectiveHooksDir: string
+): void {
+  const referencesSrc = path.join(TEMPLATES_DIR, 'references');
+  if (!fs.existsSync(referencesSrc)) {
+    throw new Error(
+      `Reference directory not found at ${referencesSrc}. Reinstall the package — phase files depend on these files existing.`
+    );
+  }
+
+  const referencesDest = path.join(skillsDir, 'references');
+  if (!fs.existsSync(referencesDest)) {
+    fs.mkdirSync(referencesDest, { recursive: true });
+  }
+
+  const entries = fs.readdirSync(referencesSrc).filter((name) => name.endsWith('.md'));
+  if (entries.length === 0) {
+    throw new Error(`Reference directory ${referencesSrc} is empty — refusing to install an incomplete skill set.`);
+  }
+
+  for (const name of entries) {
+    const content = replaceToolPaths(
+      fs.readFileSync(path.join(referencesSrc, name), 'utf-8'),
+      tool,
+      effectiveSkillsDir,
+      effectiveHooksDir,
+      false
+    );
+    fs.writeFileSync(path.join(referencesDest, name), content);
+    logger.step(`  references/${name}`);
+  }
+}
+
 function generateSubSkillShortcuts(
   baseDir: string,
   toolPaths: ToolPaths,
@@ -91,9 +144,7 @@ function generateSubSkillShortcuts(
   depStatus: DepStatus,
   tool: string,
   effectiveSkillsDir: string,
-  effectiveHooksDir: string | undefined,
-  hasHookRuntime: boolean,
-  hasEnforceScript: boolean
+  effectiveHooksDir: string
 ): void {
   logger.step('Generating sub-skill shortcuts ...');
 
@@ -105,18 +156,16 @@ function generateSubSkillShortcuts(
       fs.mkdirSync(subSkillDir, { recursive: true });
     }
 
-    // Check if template exists, otherwise generate inline
     const templatePath = path.join(TEMPLATES_DIR, subSkillName, 'SKILL.md');
-    let content: string;
-
-    if (fileExists(templatePath)) {
-      content = fs.readFileSync(templatePath, 'utf-8');
-    } else {
-      content = getSubSkillTemplate(phase);
+    if (!fileExists(templatePath)) {
+      throw new Error(
+        `Sub-skill template ${subSkillName}/SKILL.md not found at ${templatePath}. Reinstall the package — OpenFlow will not install a partial skill set.`
+      );
     }
+    let content = fs.readFileSync(templatePath, 'utf-8');
 
     // Replace tool-specific paths in content
-    content = replaceToolPaths(content, tool, effectiveSkillsDir, effectiveHooksDir, hasHookRuntime, hasEnforceScript);
+    content = replaceToolPaths(content, tool, effectiveSkillsDir, effectiveHooksDir, false);
 
     const targetPath = path.join(subSkillDir, 'SKILL.md');
     fs.writeFileSync(targetPath, content);
@@ -124,105 +173,127 @@ function generateSubSkillShortcuts(
   }
 }
 
-function replaceToolPaths(
+/** Exported so tests exercise the real rewrite instead of a drifting copy. */
+export function replaceToolPaths(
   content: string,
   tool: string,
   effectiveSkillsDir: string,
-  effectiveHooksDir: string | undefined,
-  hasHookRuntime: boolean,
-  hasEnforceScript: boolean
+  effectiveHooksDir: string,
+  assertCodexAnchors: boolean
 ): string {
   // Replace local skill path references
   content = content.replace(/\.claude\/skills\/openflow\//g, `${effectiveSkillsDir}/openflow/`);
   // Replace global skill path references
   content = content.replace(/~\/\.claude\/skills\/openflow\//g, `~/${effectiveSkillsDir}/openflow/`);
   // Skills and runtime files use different roots for Codex: skills live under
-  // .agents while hooks remain under .codex.
-  const HOOK_MISSING_MARKER = 'hooks/(lifecycle runtime is not installed for this client)';
-  if (hasHookRuntime && effectiveHooksDir) {
-    content = content.replace(/\.claude\/hooks\//g, `${effectiveHooksDir}/`);
-    content = content.replace(/~\/\.claude\/hooks\//g, `~/${effectiveHooksDir}/`);
-  } else {
-    content = content.replace(/\.claude\/hooks\//g, HOOK_MISSING_MARKER);
-    content = content.replace(/~\/\.claude\/hooks\//g, HOOK_MISSING_MARKER);
-  }
-  // For tools without an enforce hook script (OpenCode uses a plugin and
-  // Cursor has no lifecycle runtime), remove the legacy .py reference.
-  if (!hasEnforceScript) {
-    content = content.replace(/详见 `[^`]*hooks\/openflow-enforce\.py`。\n?/g, '');
-  }
+  // .agents while hooks remain under .codex. Every supported client installs
+  // the lifecycle runtime, so there is no "hooks missing" rendering.
+  content = content.replace(/\.claude\/hooks\//g, `${effectiveHooksDir}/`);
+  content = content.replace(/~\/\.claude\/hooks\//g, `~/${effectiveHooksDir}/`);
   if (tool === 'codex') {
     content = content.replace(/(^|[\s`])\/openflow(?=(?:[-\s`]|$))/gm, (_match, prefix: string) => `${prefix}$openflow`);
-    content = content.replace(
-      'enforcement / gate / detect / receipt / archive 的**生命周期运行时**由 **Claude Code** 与 **OpenCode** 安装（hooks 目录随客户端安装自动生成）。**codex / cursor 只安装 skills**——不安装 hooks/plugin 运行时，其 openflow 流程是**提示词级指导**：gate/detect 脚本不可用，阶段写入边界、receipt、`archive-verified` 均不强制执行，相关命令退回手动检查。若本地没有 gate/detect 脚本（codex/cursor，或旧版未升级），跳过相关命令，按各阶段模板的「手动检查」降级执行。',
-      'Codex 安装 enforcement / gate / detect / receipt / archive 生命周期运行时。`apply_patch` 会在写入前执行阶段边界检查；gate、detect、receipt 与 `archive-verified` 可由 `.codex/hooks/` 下的 helpers 执行。首次安装或 hooks 更新后，必须通过 `/hooks` 审核并信任该仓库 hook；OpenFlow 不会绕过 Codex hook trust。'
-    );
-    content = content.replace('Claude hook / OpenCode plugin', 'Claude hook / OpenCode plugin / Codex hook');
+    // Only the main SKILL.md carries these anchors; phase files and sub-skill
+    // shortcuts legitimately lack them.
+    if (assertCodexAnchors) {
+      content = mustReplace(
+        content,
+        'Claude hook / OpenCode plugin',
+        'Claude hook / OpenCode plugin / Codex hook',
+        'codex enforcement-artifact list'
+      );
+      content = mustReplace(
+        content,
+        '每个客户端都装完整生命周期运行时',
+        '每个客户端都装完整生命周期运行时（Codex 首次安装或 hooks 更新后，必须通过 `/hooks` 审核并信任该仓库 hook；OpenFlow 不会绕过 Codex hook trust）',
+        'codex hook-trust note'
+      );
+    }
   }
   return content;
 }
 
-function getSubSkillTemplate(phase: string): string {
-  const phaseDescriptions: Record<string, string> = {
-    proposal: 'create a change proposal',
-    brainstorming: 'deep design exploration',
-    spec: 'generate specs, test-plan, and plan-ready',
-    amend: 'revise requirements with test impact analysis',
-    build: 'execute TDD implementation',
-    verify: 'run verification gate before close',
-    close: 'archive and extract lessons',
-  };
-
-  const description = phaseDescriptions[phase] || phase;
-
-  return `---
-name: openflow-${phase}
-description: "Quick start ${phase} phase. Use /openflow-${phase} to ${description}, equivalent to /openflow ${phase}."
----
-
-这是 \`/openflow ${phase}\` 的快捷方式，等效于 \`/openflow ${phase}\`。
-
-**执行步骤**：
-
-1. **读取主协调器**：\`.claude/skills/openflow/SKILL.md\`（项目本地安装）或 \`~/.claude/skills/openflow/SKILL.md\`（全局安装）
-   - 协调器包含状态检测、前置条件检查、续接规则等核心逻辑
-   - 必须遵循协调器的路由和阶段写入边界规则
-
-2. **读取阶段参考文件**：\`${phase}.md\`（与主协调器同目录）
-   - 包含 ${phase} 阶段的详细指令和流程
-
-3. **按指令执行**：先检查前置条件，再按 ${phase}.md 的流程执行
-
-**所有协调逻辑（状态检测、前置条件、续接规则）都在主 SKILL.md 中，必须遵循。**
-`;
+/**
+ * Template rewrite that refuses to no-op.
+ *
+ * A drifted anchor used to silently skip the rewrite, shipping a template that
+ * described the wrong client. Anchor drift is a build defect, so it fails here
+ * rather than downstream in the agent's instructions.
+ */
+function mustReplace(content: string, anchor: string, replacement: string, label: string): string {
+  if (!content.includes(anchor)) {
+    throw new Error(
+      `Template anchor for ${label} not found: "${anchor}". A template was edited without updating skill-generator.ts — fix the anchor instead of shipping an unrewritten template.`
+    );
+  }
+  return content.replace(anchor, replacement);
 }
+
 
 function copyHookScript(hooksDir: string, srcName: string, destName: string, display: (p: string) => string, label: string): void {
   const src = path.join(HOOKS_DIR, srcName);
   const dest = path.join(hooksDir, destName);
   if (!fileExists(src)) {
-    logger.warn(`${label} source (${srcName}) not found, skipping`);
-    return;
+    throw new Error(
+      `${label} source (${srcName}) not found at ${src}. OpenFlow refuses to install a partial lifecycle runtime — reinstall the package or run \`pnpm run build\`.`
+    );
   }
   fs.copyFileSync(src, dest);
   fs.chmodSync(dest, 0o755);
   logger.step(`  ${label}: ${display(dest)}`);
 }
 
+/**
+ * Installs a compiled enforcement adapter next to the shared policy module.
+ *
+ * Claude and Codex both run their adapter as a standalone Node script, so the
+ * adapter's `./rules.js` import is rewritten to the installed filename. There is
+ * exactly one hand-maintained policy source (src/enforce/rules.ts); adapters own
+ * only their client's I/O contract.
+ */
+function installEnforcementAdapter(
+  hooksDir: string,
+  adapterFile: string,
+  adapterDestName: string,
+  display: (p: string) => string,
+  label: string
+): string {
+  const adapterSrc = path.resolve(__dirname, '..', 'enforce', adapterFile);
+  const rulesSrc = path.resolve(__dirname, '..', 'enforce', 'rules.js');
+  const adapterDest = path.join(hooksDir, adapterDestName);
+  const rulesDest = path.join(hooksDir, 'openflow-rules.mjs');
+
+  if (!fileExists(adapterSrc) || !fileExists(rulesSrc)) {
+    throw new Error(
+      `${label} not found in dist/enforce/ (expected ${adapterFile} and rules.js). Run \`pnpm run build\` before installing — OpenFlow will not install an agent without its enforcement layer.`
+    );
+  }
+
+  const adapter = fs.readFileSync(adapterSrc, 'utf8');
+  const rendered = adapter.replace("from './rules.js'", "from './openflow-rules.mjs'");
+  if (rendered === adapter) {
+    throw new Error(
+      `${label} (${adapterFile}) does not import './rules.js' as expected — the installer cannot rewire it. This is a build defect, not a recoverable condition.`
+    );
+  }
+
+  if (!fs.existsSync(hooksDir)) {
+    fs.mkdirSync(hooksDir, { recursive: true });
+  }
+  fs.writeFileSync(adapterDest, rendered);
+  fs.copyFileSync(rulesSrc, rulesDest);
+  fs.chmodSync(adapterDest, 0o755);
+  fs.chmodSync(rulesDest, 0o755);
+  logger.step(`  ${label}: ${display(adapterDest)}`);
+  return adapterDest;
+}
+
 function installHooks(baseDir: string, toolPaths: typeof TOOL_PATHS['claude'], global: boolean): void {
   const hooksDir = path.join(baseDir, toolPaths.hooksDir!);
   const settingsFile = path.join(baseDir, toolPaths.settingsFile!);
-  const hookScriptSrc = path.join(HOOKS_DIR, 'enforce.mjs');
-  const hookScriptDest = path.join(hooksDir, 'openflow-enforce.mjs');
   const oldPyHook = path.join(hooksDir, 'openflow-enforce.py');
 
   // Display path: prefix with ~/ for global installs
   const display = (p: string) => global ? path.join('~', path.relative(baseDir, p)) : path.relative(baseDir, p);
-
-  if (!fileExists(hookScriptSrc)) {
-    logger.warn('Hook script not found, skipping enforcement hooks setup');
-    return;
-  }
 
   // Create hooks directory
   if (!fs.existsSync(hooksDir)) {
@@ -235,8 +306,10 @@ function installHooks(baseDir: string, toolPaths: typeof TOOL_PATHS['claude'], g
     logger.step(`  Removed legacy hook: ${display(oldPyHook)}`);
   }
 
-  // Copy enforce, detect, gate, and shared fingerprint helpers
-  copyHookScript(hooksDir, 'enforce.mjs', 'openflow-enforce.mjs', display, 'Hook installed');
+  // Enforcement adapter + shared policy, then detect/gate/fingerprint helpers
+  const hookScriptDest = installEnforcementAdapter(
+    hooksDir, 'claude.js', 'openflow-enforce.mjs', display, 'Hook installed'
+  );
   copyHookScript(hooksDir, 'detect.mjs', 'openflow-detect.mjs', display, 'Detect script');
   copyHookScript(hooksDir, 'gate.mjs', 'openflow-gate.mjs', display, 'Gate script');
   copyHookScript(hooksDir, 'lifecycle-fingerprint.mjs', 'lifecycle-fingerprint.mjs', display, 'Fingerprint helper');
@@ -253,15 +326,13 @@ function parseJsonConfig(filePath: string, label: string): any | null {
   const raw = fs.readFileSync(filePath, 'utf-8');
   try {
     return JSON.parse(raw);
-  } catch {
-    const bak = `${filePath}.bak`;
-    try {
-      fs.copyFileSync(filePath, bak);
-      logger.warn(`${label} 无法解析（${filePath}），原文件已备份到 ${bak}，将以空配置合并`);
-    } catch {
-      logger.warn(`${label} 无法解析（${filePath}），且备份失败，将以空配置合并`);
-    }
-    return null;
+  } catch (err) {
+    // Merging into an empty config would silently discard the user's settings
+    // and, worse, register hooks into a file that no longer matches what they
+    // wrote. Stop and let them fix the JSON.
+    throw new Error(
+      `${label} 无法解析（${filePath}）：${(err as Error).message}\n请先修复该文件的 JSON 语法再重新运行 openflow init——OpenFlow 不会用空配置覆盖它。`
+    );
   }
 }
 
@@ -323,38 +394,22 @@ function installCodexRuntime(baseDir: string, global: boolean, toolPaths: ToolPa
     ? toolPaths.globalHooksConfigFile
     : toolPaths.hooksConfigFile;
   if (!hooksRelativeDir || !hooksConfigRelative) {
-    logger.warn('Codex hook paths are not configured, skipping lifecycle runtime');
-    return;
+    throw new Error(
+      'Codex hook paths are not configured — cannot install the lifecycle runtime. OpenFlow will not install skills without enforcement.'
+    );
   }
 
   const hooksDir = path.join(baseDir, hooksRelativeDir);
   const hooksConfigPath = path.join(baseDir, hooksConfigRelative);
   const display = (p: string) => global ? path.join('~', path.relative(baseDir, p)) : path.relative(baseDir, p);
-  const adapterSrc = path.resolve(__dirname, '..', 'enforce', 'codex.js');
-  const rulesSrc = path.resolve(__dirname, '..', 'enforce', 'rules.js');
-  const adapterDest = path.join(hooksDir, 'openflow-codex-enforce.mjs');
-  const rulesDest = path.join(hooksDir, 'openflow-rules.mjs');
-
   if (!fs.existsSync(hooksDir)) {
     fs.mkdirSync(hooksDir, { recursive: true });
   }
 
-  if (!fileExists(adapterSrc) || !fileExists(rulesSrc)) {
-    logger.warn('Codex enforcement adapter not found in dist/enforce/, skipping hook registration — run `pnpm run build` first');
-  } else {
-    const adapter = fs.readFileSync(adapterSrc, 'utf8');
-    const renderedAdapter = adapter.replace("from './rules.js'", "from './openflow-rules.mjs'");
-    if (renderedAdapter === adapter) {
-      logger.warn('Codex enforcement adapter did not contain the expected rules import, skipping hook registration');
-    } else {
-      fs.writeFileSync(adapterDest, renderedAdapter);
-      fs.copyFileSync(rulesSrc, rulesDest);
-      fs.chmodSync(adapterDest, 0o755);
-      fs.chmodSync(rulesDest, 0o755);
-      logger.step(`  Codex enforcement adapter: ${display(adapterDest)}`);
-      mergeCodexHooksConfig(hooksConfigPath, adapterDest);
-    }
-  }
+  const adapterDest = installEnforcementAdapter(
+    hooksDir, 'codex.js', 'openflow-codex-enforce.mjs', display, 'Codex enforcement adapter'
+  );
+  mergeCodexHooksConfig(hooksConfigPath, adapterDest);
 
   copyHookScript(hooksDir, 'detect.mjs', 'openflow-detect.mjs', display, 'Detect script');
   copyHookScript(hooksDir, 'gate.mjs', 'openflow-gate.mjs', display, 'Gate script');
@@ -368,13 +423,15 @@ function mergeCodexHooksConfig(hooksConfigPath: string, adapterPath: string): vo
 
   if (config.hooks === undefined) config.hooks = {};
   if (typeof config.hooks !== 'object' || config.hooks === null || Array.isArray(config.hooks)) {
-    logger.warn(`hooks.json has a non-object hooks field (${hooksConfigPath}), preserving it and skipping OpenFlow hook registration`);
-    return;
+    throw new Error(
+      `hooks.json has a non-object "hooks" field (${hooksConfigPath}). OpenFlow cannot register its enforcement hook without overwriting your config — fix the field and re-run init.`
+    );
   }
   if (config.hooks.PreToolUse === undefined) config.hooks.PreToolUse = [];
   if (!Array.isArray(config.hooks.PreToolUse)) {
-    logger.warn(`hooks.json has a non-array PreToolUse field (${hooksConfigPath}), preserving it and skipping OpenFlow hook registration`);
-    return;
+    throw new Error(
+      `hooks.json has a non-array "hooks.PreToolUse" field (${hooksConfigPath}). OpenFlow cannot register its enforcement hook without overwriting your config — fix the field and re-run init.`
+    );
   }
 
   const groups: any[] = config.hooks.PreToolUse;
@@ -411,23 +468,26 @@ function installOpencodeRuntime(baseDir: string, global: boolean, toolPaths: typ
 
   const display = (p: string) => global ? path.join('~', path.relative(baseDir, p)) : path.relative(baseDir, p);
 
-  // Resolve the compiled plugin from dist/enforce/opencode.js (the tsc output
-  // of src/enforce/opencode.ts) — not dist/core/enforce/opencode.js.
-  const pluginSrc = path.resolve(__dirname, '..', 'enforce', 'opencode.js');
+  // Self-contained bundle generated by scripts/build-opencode-plugin.mjs —
+  // policy is inlined, so the plugin resolves nothing at load time and cannot
+  // silently lose its enforcement layer inside OpenCode's runtime.
+  const pluginSrc = path.resolve(__dirname, '..', 'enforce', 'opencode-plugin.mjs');
   const pluginDest = path.join(pluginsDir, 'openflow-enforce.js');
 
   if (!fileExists(pluginSrc)) {
-    logger.warn('OpenCode plugin not found in dist/enforce/, skipping plugin setup — run `pnpm run build` first');
-  } else {
-    if (!fs.existsSync(pluginsDir)) {
-      fs.mkdirSync(pluginsDir, { recursive: true });
-    }
-    fs.copyFileSync(pluginSrc, pluginDest);
-    logger.step(`  Plugin installed: ${display(pluginDest)}`);
-
-    // Register the actual copied plugin destination in opencode.json.
-    mergeOpencodePluginConfig(opencodeJsonPath, pluginDest);
+    throw new Error(
+      'OpenCode plugin bundle not found at dist/enforce/opencode-plugin.mjs. Run `pnpm run build` before installing — OpenFlow will not install skills without enforcement.'
+    );
   }
+
+  if (!fs.existsSync(pluginsDir)) {
+    fs.mkdirSync(pluginsDir, { recursive: true });
+  }
+  fs.copyFileSync(pluginSrc, pluginDest);
+  logger.step(`  Plugin installed: ${display(pluginDest)}`);
+
+  // Register the actual copied plugin destination in opencode.json.
+  mergeOpencodePluginConfig(opencodeJsonPath, pluginDest);
 
   // Install the shared hook helpers (detect/gate/fingerprint) beside the plugin
   // so OpenCode has the same runnable lifecycle runtime as Claude.
@@ -469,34 +529,21 @@ function generateSkillFile(
   skillsDir: string,
   filename: string,
   depStatus: DepStatus,
-  tool?: string,
-  effectiveSkillsDir?: string,
-  effectiveHooksDir?: string,
-  hasHookRuntime?: boolean,
-  hasEnforceScript?: boolean
+  tool: string,
+  effectiveSkillsDir: string,
+  effectiveHooksDir: string,
+  assertCodexAnchors = false
 ): void {
   const templatePath = path.join(TEMPLATES_DIR, filename);
 
-  let content: string;
-
-  if (fileExists(templatePath)) {
-    content = fs.readFileSync(templatePath, 'utf-8');
-  } else {
-    // Fallback: use inline template
-    content = getInlineTemplate(filename, depStatus);
-  }
-
-  // Replace tool-specific paths
-  if (effectiveSkillsDir && tool) {
-    content = replaceToolPaths(
-      content,
-      tool,
-      effectiveSkillsDir,
-      effectiveHooksDir,
-      Boolean(hasHookRuntime),
-      Boolean(hasEnforceScript)
+  if (!fileExists(templatePath)) {
+    throw new Error(
+      `Template ${filename} not found at ${templatePath}. OpenFlow will not install a skill set with missing phases — reinstall the package.`
     );
   }
+  let content = fs.readFileSync(templatePath, 'utf-8');
+
+  content = replaceToolPaths(content, tool, effectiveSkillsDir, effectiveHooksDir, assertCodexAnchors);
 
   // Inject validation hint into spec.md for OpenSpec CLI
   if (filename === 'spec.md') {
@@ -523,103 +570,3 @@ function injectSpecRuntimeCheck(content: string, depStatus: DepStatus): string {
   return lines.join('\n');
 }
 
-function getInlineTemplate(filename: string, depStatus: DepStatus): string {
-  const templates: Record<string, string> = {
-    'SKILL.md': [
-      '---',
-      'name: openflow',
-      'description: "OpenSpec + Superpowers workflow orchestrator. Bridges requirements and implementation via test-first traceability: scenarios → test stubs → TDD → passing tests = requirements met."',
-      '---',
-      '',
-      '# openflow',
-      '',
-      '## 反幻觉铁律',
-      '',
-      '1. 未读不用：引用任何文件/函数/API 前必须 grep/Read 确认存在',
-      '2. 不确定就说：[Verified] [Inferred] [Assumption] [Unknown] 标签标注每一条判断',
-      '3. 反对自己：确认方案/通过测试前先提出最强反方论点',
-      '4. 重复即错误：同一问题 2 次未解决→第 3 次必须换方法',
-      '',
-      '## 核心设计理念',
-      '',
-      'OpenSpec scenarios → test-plan.md (场景→测试映射) → Superpowers TDD 执行',
-      '         ↑                                                       ↓',
-      '         ├──────────── close: 测试全部 PASS = 需求满足 ────────────┤',
-      '         └──────────── lessons.md ← 提取经验 ← 每个变更完成后 ────┘',
-      '',
-      'test-plan.md 是执行期桥梁（scenario → TDD），lessons.md 是积累期桥梁（Compound 闭环）。',
-      '',
-      '## 关键产物',
-      '',
-      '| 产物 | 生成阶段 | 作用 |',
-      '|------|----------|------|',
-      '| proposal.md | proposal / brainstorming | 需求描述 |',
-      '| design.md | spec | 技术方案 |',
-      '| specs/*.md | spec | 结构化规格（requirement + scenario） |',
-      '| tasks.md | close (自动派生) | 从 plan-ready.md 一行 grep+sed 生成，OpenSpec 格式约定 |',
-      '| test-plan.md | spec | 场景→测试映射表（执行期桥梁） |',
-      '| plan-ready.md | spec | 实现计划（每 task 绑定测试编号） |',
-      '| lessons.md | close | 经验记录（积累期桥梁，Compound 闭环） |',
-      '',
-      '## 续接与中断恢复',
-      '',
-      '1. 默认继续上一 openflow 阶段',
-      '2. proposal/brainstorming/spec/amend 只能更新文档，不修改代码',
-      '3. build 中用户补充需求/规格变更 → 切到 /openflow amend',
-      '4. 中断恢复时重新读取阶段文件、openspec/changes/ 状态和 test-plan.md',
-      '',
-      '## 阶段写入边界',
-      '',
-      '| 阶段 | 允许写入 | 禁止写入 |',
-      '|------|----------|----------|',
-      '| proposal | openspec/changes/**/proposal.md | 任何代码或实现文件 |',
-      '| brainstorming | openspec/changes/**/proposal.md | 任何代码或实现文件 |',
-      '| spec | openspec/changes/** + test-plan.md + plan-ready.md | 任何代码或实现文件 |',
-      '| amend | openspec/changes/** + test-plan.md + plan-ready.md | 代码、测试、实现文件 |',
-      '| build | 代码、测试、实现计划状态 | 规格文档 |',
-      '| verify | 验证记录、verify-issues.md | 代码、测试、规格文档 |',
-'| close | 归档、lessons.md | 代码、测试、其它实现文件 |',
-      '',
-      '## 子命令',
-      '',
-      '| 命令 | 阶段 | 说明 |',
-      '|------|------|------|',
-      '| /openflow proposal | proposal | 轻量提问，快速收敛需求 |',
-      '| /openflow brainstorming | brainstorming | 深度设计，多轮探索 |',
-      '| /openflow spec | spec | 生成规格 + test-plan.md + plan-ready.md |',
-      '| /openflow amend | amend | 受控修订需求，含测试影响分析 |',
-      '| /openflow build | build | 测试桩生成 → TDD 执行 |',
-      '| /openflow verify | verify | 验证闸门：测试+覆盖率+设计一致性 |',
-'| /openflow close | close | 经验沉淀+归档（Compound） |',
-      '',
-      '## 状态检测',
-      '',
-      '| 检查项 | 怎么查 | 结果 |',
-      '|--------|--------|------|',
-      '| 活跃变更？ | openspec/changes/ 非 archive 子目录 | 有→继续 |',
-      '| test-plan.md？ | 变更目录下是否存在 | 有→看测试状态 |',
-      '| plan-ready.md？ | 变更目录下是否存在 | 有→看实现状态 |',
-      '| 实现已开始？ | docs/superpowers/plans/ | 有→看是否完成 |',
-      '| 测试全部通过？ | test-plan.md 中所有测试 PASS | 是→close |',
-      '',
-      '## 路由',
-      '',
-      '1. 续接回复 → 保持上一阶段',
-      '2. build 中需求变更 → amend',
-      '3. 显式子命令 → 按子命令执行',
-      '4. /openflow（无子命令）→ 状态检测 → 展示结果 → 用户选择（不自动路由）',
-      '',
-      '### 前置条件',
-      '',
-      '| 阶段 | 前置条件 | 不满足时提示 |',
-      '|------|----------|-------------|',
-      '| spec | 需要活跃变更 | 先用 /openflow proposal |',
-      '| amend | 需要活跃变更 | 先完成 /openflow spec |',
-      '| build | 需要 test-plan.md + plan-ready.md | 先完成 /openflow spec |',
-      '| verify | 所有测试 PASS | 先完成 /openflow build |',
-'| close | verify 已通过 | 先完成 /openflow verify |',
-    ].join('\n'),
-  };
-
-  return templates[filename] ?? `# ${filename}\n\nTODO: implement\n`;
-}

@@ -30,7 +30,7 @@ if (Number(process.versions.node.split('.')[0]) < 20) {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, '..');
 const CLI = path.join(REPO, 'bin', 'openflow.js');
-const DIST_OPENCODE = path.join(REPO, 'dist', 'enforce', 'opencode.js');
+const DIST_OPENCODE = path.join(REPO, 'dist', 'enforce', 'opencode-plugin.mjs');
 const DIST_CODEX = path.join(REPO, 'dist', 'enforce', 'codex.js');
 
 let passed = 0;
@@ -58,21 +58,38 @@ function write(root, rel, content) {
 }
 
 // ---- fake openspec binary so `init` skips its interactive prompts ----
+// `openspec init` must actually create openspec/ — init now verifies the
+// directory exists afterwards instead of trusting the exit code.
 let fakeBin;
 function fakeOpenspecBin() {
   if (fakeBin) return fakeBin;
   fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'openflow-fakebin-'));
   const bin = path.join(fakeBin, 'openspec');
-  fs.writeFileSync(bin, '#!/bin/sh\nexit 0\n');
+  fs.writeFileSync(bin, '#!/bin/sh\nif [ "$1" = "init" ]; then mkdir -p openspec/changes; fi\nexit 0\n');
   fs.chmodSync(bin, 0o755);
   return fakeBin;
+}
+
+/**
+ * Seeds a writing-plans skill in the isolated HOME.
+ *
+ * Superpowers is a hard install-time dependency: build cannot run without
+ * writing-plans, so `openflow init` now exits non-zero when it is missing
+ * rather than installing a workflow whose build phase is dead on arrival.
+ */
+function seedSuperpowers(home) {
+  const skill = path.join(home, '.claude', 'skills', 'writing-plans', 'SKILL.md');
+  fs.mkdirSync(path.dirname(skill), { recursive: true });
+  fs.writeFileSync(skill, '---\nname: writing-plans\n---\n');
+  return skill;
 }
 
 /**
  * Run the compiled CLI (`bin/openflow.js` → `dist/cli/index.js`) with an
  * isolated HOME and a fake `openspec` on PATH, never via `openflow init`.
  */
-function runInit(cwd, home, { tools = ['claude', 'opencode', 'codex'], global = false } = {}) {
+function runInit(cwd, home, { tools = ['claude', 'opencode', 'codex'], global = false, withSuperpowers = true } = {}) {
+  if (withSuperpowers) seedSuperpowers(home);
   const args = [CLI, 'init', '--tools', tools.join(',')];
   if (global) args.push('--global');
   return spawnSync(process.execPath, args, {
@@ -110,6 +127,7 @@ function gitInit(dir) {
 
 const LOCAL_ARTIFACTS = [
   '.claude/hooks/openflow-enforce.mjs',
+  '.claude/hooks/openflow-rules.mjs',
   '.claude/hooks/openflow-detect.mjs',
   '.claude/hooks/openflow-gate.mjs',
   '.claude/hooks/lifecycle-fingerprint.mjs',
@@ -127,6 +145,7 @@ const LOCAL_ARTIFACTS = [
 
 const GLOBAL_ARTIFACTS = [
   '.claude/hooks/openflow-enforce.mjs',
+  '.claude/hooks/openflow-rules.mjs',
   '.claude/hooks/openflow-detect.mjs',
   '.claude/hooks/openflow-gate.mjs',
   '.claude/hooks/lifecycle-fingerprint.mjs',
@@ -142,11 +161,12 @@ const GLOBAL_ARTIFACTS = [
   '.codex/hooks/lifecycle-fingerprint.mjs',
 ];
 
-if (!fs.existsSync(DIST_OPENCODE)) {
-  console.log('  ⚠️  未检测到 dist/enforce/opencode.js — 请先 `pnpm run build`（插件安装断言会失败）');
-}
-if (!fs.existsSync(DIST_CODEX)) {
-  console.log('  ⚠️  未检测到 dist/enforce/codex.js — 请先 `pnpm run build`（Codex 安装断言会失败）');
+for (const artifact of [DIST_OPENCODE, DIST_CODEX]) {
+  // 构建产物缺失是失败，不是警告：警告会让后续断言以误导性的方式失败。
+  if (!fs.existsSync(artifact)) {
+    console.error(`  ❌ 构建产物缺失：${path.relative(REPO, artifact)} —— 先跑 pnpm run build`);
+    process.exit(1);
+  }
 }
 
 // ===========================================================================
@@ -167,7 +187,7 @@ await run('本地安装拷贝全部客户端产物', () => {
   assert.ok(codexSkill.includes('$openflow'), 'Codex skill 缺少 $openflow 入口');
   assert.ok(codexSkill.includes('.codex/hooks/openflow-detect.mjs'), 'Codex skill 缺少 detect helper 路径');
   assert.ok(!codexSkill.includes('.codex/skills'), 'Codex skill 仍引用旧 .codex/skills 路径');
-  assert.ok(!codexSkill.includes('**codex / cursor 只安装 skills**'), 'Codex skill 仍声明 lifecycle runtime 不可用');
+  assert.ok(!codexSkill.includes('只安装 skills'), 'Codex skill 仍声明 lifecycle runtime 不可用');
 });
 
 // ===========================================================================
@@ -287,35 +307,57 @@ await run('Codex hooks.json 保留第三方 entries 并精确注册一个 apply_
   assert.match(openflow[0].command, /\.codex[\\/]hooks[\\/]openflow-codex-enforce\.mjs/, openflow[0].command);
 });
 
-await run('损坏的 client JSON 配置备份为 .bak，不整包覆盖用户配置', () => {
+await run('损坏的 client JSON 配置 → init 报错退出，用户配置分毫未动', () => {
   const home = tmpdir('openflow-home-');
   const proj = tmpdir('openflow-proj-');
   write(proj, 'openspec/.gitkeep', '');
   // JSONC 风格（带尾逗号）：JSON.parse 失败，属手改/编辑器常见形态
-  write(proj, '.claude/settings.json', '{\n  "hooks": { "PreToolUse": [ { "matcher": "Edit", "hooks": [{ "type": "command", "command": "node keep-me.mjs" }] } ] },\n}');
-  write(proj, '.opencode/opencode.json', '{\n  "plugin": ["third-party-plugin"],\n}');
-  write(proj, '.codex/hooks.json', '{\n  "hooks": { "PreToolUse": [],\n}');
+  const original = '{\n  "hooks": { "PreToolUse": [ { "matcher": "Edit", "hooks": [{ "type": "command", "command": "node keep-me.mjs" }] } ] },\n}';
+  write(proj, '.claude/settings.json', original);
 
-  const res = runInit(proj, home, {});
-  assert.equal(res.status, 0, `init exit=${res.status}\nstderr=${res.stderr}`);
+  const res = runInit(proj, home, { tools: ['claude'] });
+  // 旧行为是「备份为 .bak 后用空配置合并」——那会静默丢掉用户手写的 hook。
+  // 现在直接失败，让用户自己修 JSON。
+  assert.notEqual(res.status, 0, 'init 必须以非零码退出');
+  assert.match(
+    `${res.stdout}${res.stderr}`,
+    /无法解析/,
+    '必须说明是哪个文件解析失败'
+  );
+  assert.equal(
+    fs.readFileSync(path.join(proj, '.claude/settings.json'), 'utf8'),
+    original,
+    '用户的 settings.json 必须原样保留，未被改写'
+  );
+  assert.ok(
+    !fs.existsSync(path.join(proj, '.claude/settings.json.bak')),
+    '不再生成 .bak——没有覆盖，就不需要备份'
+  );
+});
 
-  // 原文件被保留为 .bak，内容未丢
-  const settingsBak = path.join(proj, '.claude/settings.json.bak');
-  const opencodeBak = path.join(proj, '.opencode/opencode.json.bak');
-  const codexBak = path.join(proj, '.codex/hooks.json.bak');
-  assert.ok(fs.existsSync(settingsBak), 'settings.json.bak 存在');
-  assert.ok(fs.existsSync(opencodeBak), 'opencode.json.bak 存在');
-  assert.ok(fs.existsSync(codexBak), 'hooks.json.bak 存在');
-  assert.match(fs.readFileSync(settingsBak, 'utf8'), /keep-me\.mjs/, '.bak 保留原第三方 hook');
-  assert.match(fs.readFileSync(opencodeBak, 'utf8'), /third-party-plugin/, '.bak 保留原第三方插件');
+await run('cursor 不受支持：init 报错退出且不写任何文件', () => {
+  const home = tmpdir('openflow-home-');
+  const proj = tmpdir('openflow-proj-');
+  write(proj, 'openspec/.gitkeep', '');
 
-  // 新配置仍是合法 JSON，openflow 内容已写入
-  JSON.parse(fs.readFileSync(path.join(proj, '.claude/settings.json'), 'utf8'));
-  const config = JSON.parse(fs.readFileSync(path.join(proj, '.opencode/opencode.json'), 'utf8'));
-  assert.ok(Array.isArray(config.plugin), '新 opencode.json 为合法数组');
-  assert.ok(config.plugin.some((p) => typeof p === 'string' && /openflow-enforce\.js/.test(p)), '新 opencode.json 注册 openflow 插件');
-  const codex = JSON.parse(fs.readFileSync(path.join(proj, '.codex/hooks.json'), 'utf8'));
-  assert.ok(codex.hooks.PreToolUse.some((entry) => entry.matcher === 'apply_patch'), '新 hooks.json 注册 apply_patch hook');
+  const res = runInit(proj, home, { tools: ['cursor'] });
+  assert.notEqual(res.status, 0, 'init 必须以非零码退出');
+  assert.match(`${res.stdout}${res.stderr}`, /Unsupported tool/i, '必须指明不支持');
+  assert.ok(!fs.existsSync(path.join(proj, '.cursor')), '不得创建 .cursor 目录');
+});
+
+await run('缺少 Superpowers：init 报错退出，不安装半残工作流', () => {
+  const home = tmpdir('openflow-home-');
+  const proj = tmpdir('openflow-proj-');
+  write(proj, 'openspec/.gitkeep', '');
+
+  const res = runInit(proj, home, { tools: ['claude'], withSuperpowers: false });
+  assert.notEqual(res.status, 0, 'init 必须以非零码退出');
+  assert.match(`${res.stdout}${res.stderr}`, /Superpowers/i, '必须指明缺的是 Superpowers');
+  assert.ok(
+    !fs.existsSync(path.join(proj, '.claude/skills/openflow/SKILL.md')),
+    '不得留下 skills——build 阶段跑不起来的安装等于没安装'
+  );
 });
 
 await run('二次安装幂等：所有 client JSON 配置字节稳定', () => {
@@ -573,37 +615,21 @@ function readTemplate(rel) {
   return fs.readFileSync(p, 'utf8');
 }
 
-// Mirrors src/core/skill-generator.ts `replaceToolPaths`. Codex keeps skills
-// under .agents but installs its lifecycle runtime under .codex.
-function renderForTool(tool) {
-  const CFG = {
-    claude: { skillsDir: '.claude/skills', hooksDir: '.claude/hooks', hookRuntime: true },
-    codex: { skillsDir: '.agents/skills', hooksDir: '.codex/hooks', hookRuntime: true },
-    cursor: { skillsDir: '.cursor/skills', hooksDir: null, hookRuntime: false },
-    opencode: { skillsDir: '.opencode/skills', hooksDir: '.opencode/hooks', hookRuntime: true },
-  };
-  const { skillsDir, hooksDir, hookRuntime } = CFG[tool];
-  const HOOK_MISSING_MARKER = 'hooks/(lifecycle runtime is not installed for this client)';
-  return (content) => {
-    let c = content
-      .replace(/\.claude\/skills\/openflow\//g, `${skillsDir}/openflow/`)
-      .replace(/~\/\.claude\/skills\/openflow\//g, `~/${skillsDir}/openflow/`);
-    if (hookRuntime) {
-      c = c
-        .replace(/\.claude\/hooks\//g, `${hooksDir}/`)
-        .replace(/~\/\.claude\/hooks\//g, `~/${hooksDir}/`);
-    } else {
-      c = c
-        .replace(/\.claude\/hooks\//g, HOOK_MISSING_MARKER)
-        .replace(/~\/\.claude\/hooks\//g, HOOK_MISSING_MARKER);
-    }
-    if (tool === 'codex') {
-      c = c
-        .replace(/(^|[\s`])\/openflow(?=(?:[-\s`]|$))/gm, (_match, prefix) => `${prefix}$openflow`)
-        .replace('**codex / cursor 只安装 skills**', '**cursor 只安装 skills**');
-    }
-    return c;
-  };
+// Uses the real replaceToolPaths from the built installer — a mirrored copy
+// here would drift from the implementation it claims to verify.
+const { replaceToolPaths } = await import(
+  pathToFileURL(path.resolve(REPO, 'dist', 'core', 'skill-generator.js')).href
+);
+
+const RENDER_CFG = {
+  claude: { skillsDir: '.claude/skills', hooksDir: '.claude/hooks' },
+  codex: { skillsDir: '.agents/skills', hooksDir: '.codex/hooks' },
+  opencode: { skillsDir: '.opencode/skills', hooksDir: '.opencode/hooks' },
+};
+
+function renderForTool(tool, { isMainSkill = false } = {}) {
+  const { skillsDir, hooksDir } = RENDER_CFG[tool];
+  return (content) => replaceToolPaths(content, tool, skillsDir, hooksDir, isMainSkill);
 }
 
 // Templates that must invoke the installed gate helper (they run gate subcommands).
@@ -656,24 +682,35 @@ await run('渲染到 Codex：skills 使用 .agents，gate/detect 使用 .codex�
     if (rel === 'SKILL.md') {
       assert.ok(rendered.includes('.codex/hooks/openflow-detect.mjs'), 'SKILL.md 渲染后无 Codex detect 路径');
       assert.ok(rendered.includes('$openflow'), 'SKILL.md 渲染后无 $openflow 入口');
-      assert.ok(!rendered.includes('**codex / cursor 只安装 skills**'), 'SKILL.md 仍将 Codex 标为 skills-only');
     }
   }
 });
 
-await run('渲染到 Cursor：无幻影 hooks 路径且保留 runtime 不可用标注', () => {
-  const render = renderForTool('cursor');
+await run('模板不再保留任何降级出口（手动检查 / runtime 不可用标注）', () => {
+  const FORBIDDEN = [
+    'lifecycle runtime is not installed',
+    '手动状态检测',
+    '降级执行',
+    '降级方案',
+    '脚本不可用时',
+  ];
   for (const rel of [...MAIN_TEMPLATES, ...SHORTCUT_TEMPLATES]) {
-    const rendered = render(readTemplate(rel));
-    assert.ok(!rendered.includes('.cursor/hooks/openflow-gate.mjs'), `${rel} 渲染后仍引用幻影 Cursor gate 路径`);
-    if (GATE_TEMPLATES.has(rel) || rel === 'SKILL.md') {
-      assert.ok(rendered.includes('lifecycle runtime is not installed'), `${rel} 渲染后无 runtime 不可用标注`);
+    const c = readTemplate(rel);
+    for (const phrase of FORBIDDEN) {
+      assert.ok(!c.includes(phrase), `${rel} 仍保留降级出口：「${phrase}」`);
     }
   }
+});
+
+await run('缺 gate/detect 时模板要求停止重装，而不是手动替代', () => {
+  const skill = readTemplate('SKILL.md');
+  assert.match(skill, /没有降级模式/, 'SKILL.md 必须显式声明无降级模式');
+  assert.match(skill, /重新安装|重装/, 'SKILL.md 必须给出重装指引');
+  assert.ok(!skill.includes('cursor 只安装 skills'), 'SKILL.md 不应再描述 skills-only 客户端');
 });
 
 await run('渲染后 helpers 路径不依赖失效的 skills→hooks 字符串推导（Codex skills/hooks 目录名不同）', () => {
-  for (const tool of ['claude', 'codex', 'opencode', 'cursor']) {
+  for (const tool of ['claude', 'codex', 'opencode']) {
     const render = renderForTool(tool);
     for (const rel of [...MAIN_TEMPLATES, ...SHORTCUT_TEMPLATES]) {
       const rendered = render(readTemplate(rel));
@@ -696,6 +733,34 @@ await run('spec.md 生成 T-001 稳定 ID + 状态后缀语法，plan-ready 绑�
   assert.ok(c.includes('::'), '缺少 file::selector 选择器格式');
   assert.match(c, /✅ PASS/, '缺少状态后缀语法文档');
   assert.match(c, /Test cases?\s*:\s*T-\d{3}/i, 'plan-ready 任务未绑定稳定 ID（Test cases: T-001）');
+});
+
+// 模板是这套语法唯一的教学面：gate 认得 🔴 RED / INV-00x，模板不教就等于没有。
+await run('spec.md 文档化 🔴 RED 证据与 INV 不变量行语法', () => {
+  const c = readTemplate('spec.md');
+  assert.match(c, /🔴 RED/, '缺少 RED 证据标记语法');
+  assert.match(c, /INV-\d{3}:\s*`[^`]+`\s+covers\s+T-\d{3}/, '缺少 INV 不变量行示例（含 covers 子句）');
+});
+
+await run('build.md Step 2 要求追加 🔴 RED 且说明桩失败不算证据', () => {
+  const c = readTemplate('build.md');
+  assert.match(c, /Step 2:.*🔴 RED/, 'Step 2 未要求追加 RED 标记');
+  assert.match(c, /🔴 RED ✅ PASS/, '缺少完整状态后缀示例');
+  assert.ok(c.includes('这一次红不算'), '未区分测试桩的红与断言的红');
+});
+
+await run('verify.md 闸门 1 拦缺 RED，闸门 4 查 GIVEN 对齐与跨用例委托', () => {
+  const c = readTemplate('verify.md');
+  assert.match(c, /缺\s*`?🔴 RED`?/, '闸门 1 未处理缺 RED 的情况');
+  assert.ok(c.includes('GIVEN 对齐'), '闸门 4 缺少 GIVEN 对齐检查');
+  assert.ok(c.includes('跨用例委托'), '闸门 4 缺少跨用例委托检查');
+});
+
+await run('code-verification.md 含状态叉乘矩阵章节', () => {
+  const c = readTemplate('references/code-verification.md');
+  assert.ok(c.includes('状态叉乘矩阵'), '缺少状态叉乘矩阵章节');
+  assert.match(c, /覆盖\s*T-id/, '矩阵未要求按 T-id 填覆盖');
+  assert.ok(c.includes('空白理由'), '矩阵未要求空白格写显式理由');
 });
 
 await run('build.md 先写 bootstrap 再写 task-build，结尾指向 /openflow verify', () => {
@@ -737,12 +802,14 @@ await run('close.md 只用 archive-verified，禁止原始 openspec archive 命�
 console.log('\n[6] 端到端集成（canonical test-plan 语法跨 enforcement/Gate/detect）');
 
 // spec.md 模板生成的 canonical plan/test-plan（稳定行 + 状态后缀）。
+// `🔴 RED` 是 build Step 2 观察到失败后追加的证据标记；缺它的 ✅ PASS 行会被
+// 已安装的 gate 判为 red_evidence_missing，所以端到端夹具必须带上。
 const CANONICAL_TP = [
-  'T-001: `tests/auth/test_login.py::test_login_with_valid_credentials` ✅ PASS',
-  'T-002: `tests/auth/test_login.py::test_login_with_wrong_password` ✅ PASS',
+  'T-001: `tests/auth/test_login.py::test_login_with_valid_credentials` 🔴 RED ✅ PASS',
+  'T-002: `tests/auth/test_login.py::test_login_with_wrong_password` 🔴 RED ✅ PASS',
 ].join('\n');
 const CANONICAL_TP_TODO = CANONICAL_TP.replace(
-  'T-002: `tests/auth/test_login.py::test_login_with_wrong_password` ✅ PASS',
+  'T-002: `tests/auth/test_login.py::test_login_with_wrong_password` 🔴 RED ✅ PASS',
   'T-002: `tests/auth/test_login.py::test_login_with_wrong_password` ⬜ TODO'
 );
 
@@ -765,7 +832,17 @@ function writeCanonicalChange(proj, change = 'add-widget') {
   write(proj, `${base}/test-plan.md`, CANONICAL_TP);
   write(proj, `${base}/plan-ready.md`, CANONICAL_PR);
   write(proj, `${base}/proposal.md`, '## Why\n\nNeeds login for operators.\n\n## What Changes\n\n- add login\n');
-  write(proj, `${base}/design.md`, '## 现状与影响面\n\n- 改动点 `login`\n\n## 改动文件\n\n- src/auth/login.py\n');
+  write(
+    proj,
+    `${base}/design.md`,
+    [
+      '## 现状与影响面', '',
+      '### 改动点 1：登录校验',
+      '- 目标：`src/auth/login.py::login`', '',
+      '## 改动文件', '',
+      '- src/auth/login.py', '',
+    ].join('\n')
+  );
   write(proj, 'tests/auth/test_login.py', 'def test_login_with_valid_credentials():\n    assert True\n\ndef test_login_with_wrong_password():\n    assert True\n');
   write(proj, 'src/auth/login.py', 'def login(u, p):\n    return True\n');
 }

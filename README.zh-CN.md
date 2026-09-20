@@ -20,18 +20,19 @@ openflow init --tools claude,codex,opencode
 ```
 
 `init` 会自动：
-1. 检测并引导安装 OpenSpec CLI
-2. 检测 Superpowers 并提示安装方式
-3. 检测项目 OpenSpec 初始化状态
+1. **要求** OpenSpec CLI（可代为安装；装不上则退出码 1）
+2. **要求** Superpowers writing-plans（缺失即退出码 1——没有它 build 阶段跑不起来）
+3. **要求** 项目已初始化 `openspec/`
 4. 为所选客户端生成 OpenFlow skills 和生命周期运行时产物
 
-支持的工具：`claude`、`codex`、`opencode`、`cursor`（逗号分隔）
+支持的工具：`claude`、`codex`、`opencode`（逗号分隔）。**不支持 Cursor**：它没有 hook/plugin 机制，
+阶段闸门、verify receipt、验证归档都无法强制执行；`init` 会直接报错退出，而不是装一套「看起来被强制」的 skills。
 
 ### 安装到全局 skills
 
 ```bash
 openflow init --tools claude -g
-openflow init --tools claude,codex,opencode,cursor --global
+openflow init --tools claude,codex,opencode --global
 ```
 
 加 `-g` / `--global` 后，`openflow` 会把 skills 安装到所选工具的全局目录：
@@ -41,7 +42,6 @@ openflow init --tools claude,codex,opencode,cursor --global
 | `claude` | `~/.claude/skills/openflow/` |
 | `codex` | `~/.agents/skills/openflow/` |
 | `opencode` | `~/.config/opencode/skills/openflow/` |
-| `cursor` | `~/.cursor/skills/openflow/` |
 
 ### 客户端运行时支持
 
@@ -50,7 +50,6 @@ openflow init --tools claude,codex,opencode,cursor --global
 | `claude` | `.claude/skills/` | `.claude/hooks/` | `/openflow ...` |
 | `codex` | `.agents/skills/` | `.codex/hooks/` + `.codex/hooks.json` | `$openflow ...` 或 `/skills` |
 | `opencode` | `.opencode/skills/` | `.opencode/plugins/` 和 `.opencode/hooks/` | 自然语言触发 skill |
-| `cursor` | `.cursor/skills/` | 不安装 | 客户端 skill 选择 |
 
 Codex 会为 `apply_patch` 注册 hook。安装或更新后，必须在 Codex 中用
 `/hooks` 审核并信任仓库 hook；OpenFlow 不会启用绕过 hook trust 的参数。
